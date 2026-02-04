@@ -5,7 +5,7 @@ local RunService = game:GetService("RunService")
 local IS_SERVER = RunService:IsServer()
 
 local Packages = script.Parent.Parent.Parent
-local ChronoSrc = Packages["chrono-lua"].src
+local ChronoSrc = Packages["chrono-lua"]
 local Shared = ChronoSrc.Shared
 
 -- Main module (contains Start)
