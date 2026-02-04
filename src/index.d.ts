@@ -8,10 +8,10 @@
 type ModelReplicationMode = "NATIVE" | "NATIVE_WITH_LOCK" | "CUSTOM";
 
 // Player replication modes
-type PlayerReplicationMode = "AUTOMATIC" | "MANUAL";
+type PlayerReplicationMode = "AUTOMATIC" | "CUSTOM";
 
-// Death replication modes
-type ReplicateDeathsMode = "PLAYER_ENTITIES" | "ALL" | "NONE";
+// Replication filter modes (used for REPLICATE_DEATHS and REPLICATE_CFRAME_SETTERS)
+type ReplicationFilterMode = "NONE" | "PLAYER_ENTITIES" | "PLAYER_CHARACTERS";
 
 // Configuration option names
 type ConfigName =
@@ -26,7 +26,8 @@ type ConfigName =
 	| "PLAYER_REPLICATION"
 	| "REPLICATE_DEATHS"
 	| "REPLICATE_CFRAME_SETTERS"
-	| "MAX_TOTAL_BYTES_PER_FRAME_PER_PLAYER";
+	| "MAX_TOTAL_BYTES_PER_FRAME_PER_PLAYER"
+	| "SEND_FULL_ROTATION";
 
 // Event system types
 interface Connection {
@@ -35,14 +36,14 @@ interface Connection {
 }
 
 interface ChronoEvent<T extends Callback = Callback> {
-	Connect(callback: T): Connection;
-	Once(callback: T): Connection;
-	Wait(): LuaTuple<Parameters<T>>;
+	Connect(callback: T, defer?: boolean): Connection;
+	Once(callback: T, defer?: boolean): Connection;
+	Wait(defer?: boolean): LuaTuple<Parameters<T>>;
 }
 
 // Snapshot types
 interface SnapshotData<Value, Velocity> {
-	timeStamp: number;
+	t: number;
 	value: Value;
 	velocity: Velocity;
 }
@@ -56,18 +57,15 @@ interface Snapshot<Value, Velocity> {
 
 // Entity configuration input
 interface EntityConfigInput {
-	TICK_RATE?: number;
-	CLIENT_CLOCK?: {
-		MIN_BUFFER?: number;
-		MAX_BUFFER?: number;
-	};
-	BUFFER?: {
-		MIN?: number;
-		MAX?: number;
-	};
+	BUFFER: number;
+	TICK_RATE: number;
+	FULL_ROTATION?: boolean;
+	AUTO_UPDATE_POSITION?: boolean;
+	STORE_SNAPSHOTS?: boolean;
 	MODEL_REPLICATION_MODE?: ModelReplicationMode;
 	NORMAL_TICK_DISTANCE?: number;
 	HALF_TICK_DISTANCE?: number;
+	CUSTOM_INTERPOLATION?: boolean;
 }
 
 // Stats interfaces
@@ -99,19 +97,41 @@ interface ServerStats {
 
 // Entity event names
 type EntityEventName =
-	| "OnDestroy"
-	| "OnModelSet"
-	| "OnModelRemoved"
-	| "OnCFrameSet"
-	| "OnDataSet"
-	| "OnMountSet"
-	| "OnMountCleared"
-	| "OnNetworkOwnerSet"
-	| "OnReplicationPaused"
-	| "OnReplicationResumed";
+	| "Destroying"
+	| "NetworkOwnerChanged"
+	| "PushedSnapShot"
+	| "TickChanged"
+	| "DataChanged"
+	| "Ticked"
+	| "ModelChanged"
+	| "LockChanged";
 
 // Entity interface
 interface Entity {
+	/** Unique identifier for this entity */
+	readonly id: number;
+
+	/** Whether this entity is registered with the system */
+	readonly registered: boolean;
+
+	/** Whether this entity has been destroyed */
+	readonly destroyed: boolean;
+
+	/** The player who owns this entity (controls its movement) */
+	readonly networkOwner: Player | undefined;
+
+	/** Whether the current context (client/server) is the network owner */
+	readonly isContextOwner: boolean;
+
+	/** The model associated with this entity */
+	readonly model: Model | BasePart | undefined;
+
+	/** Whether replication is paused for this entity */
+	readonly paused: boolean;
+
+	/** The most recent CFrame value */
+	readonly latestCFrame: CFrame | undefined;
+
 	/** Sets or changes the model for this entity */
 	SetModel(
 		model?: Model | BasePart | string,
@@ -183,16 +203,20 @@ interface Entity {
 	Destroy(): void;
 
 	/** Gets an event by name */
-	GetEvent(name: "OnDestroy"): ChronoEvent<() => void>;
-	GetEvent(name: "OnModelSet"): ChronoEvent<(model: Model | BasePart) => void>;
-	GetEvent(name: "OnModelRemoved"): ChronoEvent<(model: Model | BasePart) => void>;
-	GetEvent(name: "OnCFrameSet"): ChronoEvent<(cframe: CFrame) => void>;
-	GetEvent(name: "OnDataSet"): ChronoEvent<(data: unknown) => void>;
-	GetEvent(name: "OnMountSet"): ChronoEvent<(parent: Entity, offset: CFrame) => void>;
-	GetEvent(name: "OnMountCleared"): ChronoEvent<() => void>;
-	GetEvent(name: "OnNetworkOwnerSet"): ChronoEvent<(player: Player | undefined) => void>;
-	GetEvent(name: "OnReplicationPaused"): ChronoEvent<() => void>;
-	GetEvent(name: "OnReplicationResumed"): ChronoEvent<() => void>;
+	GetEvent(name: "Destroying"): ChronoEvent<(entity: Entity) => void>;
+	GetEvent(
+		name: "NetworkOwnerChanged",
+	): ChronoEvent<(entity: Entity, newOwner: Player | undefined, prevOwner: Player | undefined) => void>;
+	GetEvent(
+		name: "PushedSnapShot",
+	): ChronoEvent<(entity: Entity, time: number, value: CFrame, isNewest: boolean) => void>;
+	GetEvent(name: "TickChanged"): ChronoEvent<(entity: Entity, newTickType: "NONE" | "HALF" | "NORMAL") => void>;
+	GetEvent(name: "DataChanged"): ChronoEvent<(entity: Entity, data: unknown) => void>;
+	GetEvent(name: "Ticked"): ChronoEvent<(entity: Entity, dt: number) => void>;
+	GetEvent(
+		name: "ModelChanged",
+	): ChronoEvent<(entity: Entity, newModel: Model | BasePart | undefined, oldModel: Model | BasePart | undefined) => void>;
+	GetEvent(name: "LockChanged"): ChronoEvent<(entity: Entity, isLocked: boolean) => void>;
 	GetEvent(name: EntityEventName): ChronoEvent;
 }
 
@@ -249,8 +273,8 @@ declare namespace Chrono {
 		/** Gets the entity associated with a model */
 		function GetEntityFromModel(model: Model): Entity | undefined;
 
-		/** Map of entity IDs to entities */
-		const idMap: Map<number, Entity>;
+		/** Map of entity IDs to entities (Lua table, use .get() to access) */
+		const idMap: ReadonlyMap<number, Entity>;
 	}
 
 	/** Global events */
@@ -286,9 +310,10 @@ declare namespace Chrono {
 		function SetConfig(name: "DEFAULT_HALF_TICK_DISTANCE", value: number): void;
 		function SetConfig(name: "DEFAULT_MODEL_REPLICATION_MODE", value: ModelReplicationMode): void;
 		function SetConfig(name: "PLAYER_REPLICATION", value: PlayerReplicationMode): void;
-		function SetConfig(name: "REPLICATE_DEATHS", value: ReplicateDeathsMode): void;
-		function SetConfig(name: "REPLICATE_CFRAME_SETTERS", value: boolean): void;
+		function SetConfig(name: "REPLICATE_DEATHS", value: ReplicationFilterMode): void;
+		function SetConfig(name: "REPLICATE_CFRAME_SETTERS", value: ReplicationFilterMode): void;
 		function SetConfig(name: "MAX_TOTAL_BYTES_PER_FRAME_PER_PLAYER", value: number): void;
+		function SetConfig(name: "SEND_FULL_ROTATION", value: boolean): void;
 		function SetConfig(name: ConfigName, value: unknown): void;
 
 		/** Registers a custom entity type configuration */
@@ -300,14 +325,14 @@ declare namespace Chrono {
 
 	/** Replication rules for controlling entity visibility */
 	namespace ReplicationRules {
-		/** Sets a replication rule for a target */
+		/** Sets a replication rule for a target. Pass undefined to clear the rule. */
 		function SetReplicationRule(
 			target: Player | Model | number | Entity,
-			rule: ReplicationRule | RuleFn,
+			rule: ReplicationRule | RuleFn | undefined,
 		): void;
 
 		/** Checks if an entity should be replicated to a viewer */
-		function Allows(entity: Entity, viewer: Player, viewerEntityId?: number): boolean;
+		function Allows(entity: Entity, viewer: Player): boolean;
 
 		/** Creates a rule that only includes specified players */
 		function Include(players: Player[]): RuleFn;
