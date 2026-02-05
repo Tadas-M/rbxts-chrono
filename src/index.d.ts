@@ -397,6 +397,18 @@ declare namespace Chrono {
 			) => Value,
 		): Snapshot<Value, Velocity>;
 	}
+
+	// Type exports for external use
+	export type Entity = globalThis.Entity;
+	export type ChronoEvent<T extends Callback = Callback> = globalThis.ChronoEvent<T>;
+	export type Connection = globalThis.Connection;
+	export type EntityConfigInput = globalThis.EntityConfigInput;
+	export type Snapshot<Value, Velocity> = globalThis.Snapshot<Value, Velocity>;
+	export type SnapshotData<Value, Velocity> = globalThis.SnapshotData<Value, Velocity>;
+	export type ModelReplicationMode = globalThis.ModelReplicationMode;
+	export type PlayerReplicationMode = globalThis.PlayerReplicationMode;
+	export type ReplicationFilterMode = globalThis.ReplicationFilterMode;
+	export type EntityEventName = globalThis.EntityEventName;
 }
 
 export = Chrono;
