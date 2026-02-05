@@ -142,98 +142,100 @@ interface EntityConstructor {
 	): Entity;
 
 	/** Sets or changes the model for an entity */
-	SetModel(
+	SetModel: (
 		entity: Entity,
 		model?: Model | BasePart | string,
 		modelReplicationMode?: ModelReplicationMode,
 		noDestroy?: boolean,
-	): void;
+	) => void;
 
 	/** Sets the entity configuration type */
-	SetConfig(entity: Entity, entityConfig: string): void;
+	SetConfig: (entity: Entity, entityConfig: string) => void;
 
 	/** Sets the broad phase collision bounds */
-	SetBroadPhase(entity: Entity, broadPhase?: Vector3): void;
+	SetBroadPhase: (entity: Entity, broadPhase?: Vector3) => void;
 
 	/** Gets custom data associated with an entity */
-	GetData<T = unknown>(entity: Entity): T;
+	GetData: <T = unknown>(entity: Entity) => T;
 
 	/** Gets the model associated with an entity */
-	GetModel(entity: Entity): Model | BasePart | undefined;
+	GetModel: (entity: Entity) => Model | BasePart | undefined;
 
 	/** Sets custom data for an entity */
-	SetData(entity: Entity, data: unknown): void;
+	SetData: (entity: Entity, data: unknown) => void;
 
 	/** Clears the mount relationship */
-	ClearMount(entity: Entity): void;
+	ClearMount: (entity: Entity) => void;
 
 	/** Mounts an entity to a parent entity with optional offset */
-	SetMount(entity: Entity, parent?: Entity, offset?: CFrame): void;
+	SetMount: (entity: Entity, parent?: Entity, offset?: CFrame) => void;
 
 	/** Sets the network owner (player who controls this entity) */
-	SetNetworkOwner(entity: Entity, player?: Player): void;
+	SetNetworkOwner: (entity: Entity, player?: Player) => void;
 
 	/** Clears the entity's snapshot buffer */
-	Clear(entity: Entity): void;
+	Clear: (entity: Entity) => void;
 
 	/** Pauses replication for an entity */
-	PauseReplication(entity: Entity): void;
+	PauseReplication: (entity: Entity) => void;
 
 	/** Resumes replication for an entity */
-	ResumeReplication(entity: Entity): void;
+	ResumeReplication: (entity: Entity) => void;
 
 	/** Pushes a new CFrame snapshot at the given time */
-	Push(entity: Entity, time: number, value: CFrame): boolean;
+	Push: (entity: Entity, time: number, value: CFrame) => boolean;
 
 	/** Gets the interpolated CFrame at a specific time */
-	GetAt(entity: Entity, time: number): CFrame | undefined;
+	GetAt: (entity: Entity, time: number) => CFrame | undefined;
 
 	/** Gets the target render time for interpolation */
-	GetTargetRenderTime(entity: Entity): number;
+	GetTargetRenderTime: (entity: Entity) => number;
 
 	/** Sets whether position updates automatically */
-	SetAutoUpdatePos(entity: Entity, autoUpdate: boolean): void;
+	SetAutoUpdatePos: (entity: Entity, autoUpdate: boolean) => void;
 
 	/** Gets the current CFrame */
-	GetCFrame(entity: Entity): CFrame | undefined;
+	GetCFrame: (entity: Entity) => CFrame | undefined;
 
 	/** Sets the current CFrame */
-	SetCFrame(entity: Entity, cframe: CFrame): void;
+	SetCFrame: (entity: Entity, cframe: CFrame) => void;
 
 	/** Gets the primary part of the model */
-	GetPrimaryPart(entity: Entity): BasePart | undefined;
+	GetPrimaryPart: (entity: Entity) => BasePart | undefined;
 
 	/** Locks native server CFrame replication */
-	LockNativeServerCFrameReplication(entity: Entity): void;
+	LockNativeServerCFrameReplication: (entity: Entity) => void;
 
 	/** Unlocks native server CFrame replication */
-	UnlockNativeServerCFrameReplication(entity: Entity): void;
+	UnlockNativeServerCFrameReplication: (entity: Entity) => void;
 
 	/** Destroys an entity */
-	Destroy(entity: Entity): void;
+	Destroy: (entity: Entity) => void;
 
 	/** Gets an event by name */
-	GetEvent(entity: Entity, name: "Destroying"): ChronoEvent<(entity: Entity) => void>;
-	GetEvent(
-		entity: Entity,
-		name: "NetworkOwnerChanged",
-	): ChronoEvent<(entity: Entity, newOwner: Player | undefined, prevOwner: Player | undefined) => void>;
-	GetEvent(
-		entity: Entity,
-		name: "PushedSnapShot",
-	): ChronoEvent<(entity: Entity, time: number, value: CFrame, isNewest: boolean) => void>;
-	GetEvent(
-		entity: Entity,
-		name: "TickChanged",
-	): ChronoEvent<(entity: Entity, newTickType: "NONE" | "HALF" | "NORMAL") => void>;
-	GetEvent(entity: Entity, name: "DataChanged"): ChronoEvent<(entity: Entity, data: unknown) => void>;
-	GetEvent(entity: Entity, name: "Ticked"): ChronoEvent<(entity: Entity, dt: number) => void>;
-	GetEvent(
-		entity: Entity,
-		name: "ModelChanged",
-	): ChronoEvent<(entity: Entity, newModel: Model | BasePart | undefined, oldModel: Model | BasePart | undefined) => void>;
-	GetEvent(entity: Entity, name: "LockChanged"): ChronoEvent<(entity: Entity, isLocked: boolean) => void>;
-	GetEvent(entity: Entity, name: EntityEventName): ChronoEvent;
+	GetEvent: ((entity: Entity, name: "Destroying") => ChronoEvent<(entity: Entity) => void>) &
+		((
+			entity: Entity,
+			name: "NetworkOwnerChanged",
+		) => ChronoEvent<(entity: Entity, newOwner: Player | undefined, prevOwner: Player | undefined) => void>) &
+		((
+			entity: Entity,
+			name: "PushedSnapShot",
+		) => ChronoEvent<(entity: Entity, time: number, value: CFrame, isNewest: boolean) => void>) &
+		((
+			entity: Entity,
+			name: "TickChanged",
+		) => ChronoEvent<(entity: Entity, newTickType: "NONE" | "HALF" | "NORMAL") => void>) &
+		((entity: Entity, name: "DataChanged") => ChronoEvent<(entity: Entity, data: unknown) => void>) &
+		((entity: Entity, name: "Ticked") => ChronoEvent<(entity: Entity, dt: number) => void>) &
+		((
+			entity: Entity,
+			name: "ModelChanged",
+		) => ChronoEvent<
+			(entity: Entity, newModel: Model | BasePart | undefined, oldModel: Model | BasePart | undefined) => void
+		>) &
+		((entity: Entity, name: "LockChanged") => ChronoEvent<(entity: Entity, isLocked: boolean) => void>) &
+		((entity: Entity, name: EntityEventName) => ChronoEvent);
 }
 
 // Replication rule types
