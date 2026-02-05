@@ -29,6 +29,23 @@ type ConfigName =
 	| "MAX_TOTAL_BYTES_PER_FRAME_PER_PLAYER"
 	| "SEND_FULL_ROTATION";
 
+// Configuration value types mapped to config names
+interface ConfigValueMap {
+	MIN_BUFFER: number;
+	MAX_BUFFER: number;
+	SHOW_WARNINGS: boolean;
+	MAX_SNAPSHOT_COUNT: number;
+	CHECK_NEW_VERSION: boolean;
+	DEFAULT_NORMAL_TICK_DISTANCE: number;
+	DEFAULT_HALF_TICK_DISTANCE: number;
+	DEFAULT_MODEL_REPLICATION_MODE: ModelReplicationMode;
+	PLAYER_REPLICATION: PlayerReplicationMode;
+	REPLICATE_DEATHS: ReplicationFilterMode;
+	REPLICATE_CFRAME_SETTERS: ReplicationFilterMode;
+	MAX_TOTAL_BYTES_PER_FRAME_PER_PLAYER: number;
+	SEND_FULL_ROTATION: boolean;
+}
+
 // Event system types
 interface Connection {
 	Disconnect(): void;
@@ -310,20 +327,7 @@ declare namespace Chrono {
 	/** Configuration functions */
 	namespace Config {
 		/** Sets a configuration value (must be called before Start) */
-		function SetConfig(name: "MIN_BUFFER", value: number): void;
-		function SetConfig(name: "MAX_BUFFER", value: number): void;
-		function SetConfig(name: "SHOW_WARNINGS", value: boolean): void;
-		function SetConfig(name: "MAX_SNAPSHOT_COUNT", value: number): void;
-		function SetConfig(name: "CHECK_NEW_VERSION", value: boolean): void;
-		function SetConfig(name: "DEFAULT_NORMAL_TICK_DISTANCE", value: number): void;
-		function SetConfig(name: "DEFAULT_HALF_TICK_DISTANCE", value: number): void;
-		function SetConfig(name: "DEFAULT_MODEL_REPLICATION_MODE", value: ModelReplicationMode): void;
-		function SetConfig(name: "PLAYER_REPLICATION", value: PlayerReplicationMode): void;
-		function SetConfig(name: "REPLICATE_DEATHS", value: ReplicationFilterMode): void;
-		function SetConfig(name: "REPLICATE_CFRAME_SETTERS", value: ReplicationFilterMode): void;
-		function SetConfig(name: "MAX_TOTAL_BYTES_PER_FRAME_PER_PLAYER", value: number): void;
-		function SetConfig(name: "SEND_FULL_ROTATION", value: boolean): void;
-		function SetConfig(name: ConfigName, value: unknown): void;
+		function SetConfig<K extends ConfigName>(name: K, value: ConfigValueMap[K]): void;
 
 		/** Registers a custom entity type configuration */
 		function RegisterEntityType(name: string, config: EntityConfigInput): void;
