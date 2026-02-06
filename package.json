@@ -1,6 +1,6 @@
 {
   "name": "rbxts-chrono",
-  "version": "2.0.0-experimental.7",
+  "version": "2.0.0-experimental.8",
   "description": "TypeScript types for Chrono - Custom Character Replication for Roblox",
   "main": "src/init.lua",
   "types": "src/index.d.ts",
