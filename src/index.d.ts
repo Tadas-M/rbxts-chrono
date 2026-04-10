@@ -1,5 +1,5 @@
 /**
- * TypeScript definitions for Chrono v2.0.0-experimental
+ * TypeScript definitions for Chrono v2.0.0
  * Custom Character Replication for Roblox
  * @see https://github.com/Parihsz/Chrono
  */
@@ -22,8 +22,7 @@ declare namespace Chrono {
 		| "PLAYER_REPLICATION"
 		| "REPLICATE_DEATHS"
 		| "REPLICATE_CFRAME_SETTERS"
-		| "MAX_TOTAL_BYTES_PER_FRAME_PER_PLAYER"
-		| "SEND_FULL_ROTATION";
+		| "MAX_TOTAL_BYTES_PER_FRAME_PER_PLAYER";
 
 	export type EntityEventName =
 		| "Destroying"
@@ -52,7 +51,6 @@ declare namespace Chrono {
 		REPLICATE_DEATHS: ReplicationFilterMode;
 		REPLICATE_CFRAME_SETTERS: ReplicationFilterMode;
 		MAX_TOTAL_BYTES_PER_FRAME_PER_PLAYER: number;
-		SEND_FULL_ROTATION: boolean;
 	}
 
 	export interface Connection {
@@ -136,11 +134,38 @@ declare namespace Chrono {
 		/** The model associated with this entity */
 		readonly model: Model | BasePart | undefined;
 
+		/** The model string identifier */
+		readonly modelString: string | undefined;
+
+		/** The model replication mode for this entity */
+		readonly modelReplicationMode: "NATIVE" | "CUSTOM" | undefined;
+
 		/** Whether replication is paused for this entity */
 		readonly paused: boolean;
 
 		/** The most recent CFrame value */
 		readonly latestCFrame: CFrame | undefined;
+
+		/** The timestamp of the most recent update */
+		readonly latestTime: number | undefined;
+
+		/** Whether position updates automatically */
+		readonly autoUpdatePosition: boolean;
+
+		/** The broad phase size used for frustum culling */
+		readonly broadPhase: Vector3 | undefined;
+
+		/** The entity configuration */
+		readonly entityConfig: EntityConfigInput;
+
+		/** The snapshot buffer for this entity */
+		readonly snapshot: Snapshot<CFrame, Vector3> | undefined;
+
+		/** The parent entity ID if mounted */
+		readonly mountParentId: number | undefined;
+
+		/** The CFrame offset when mounted to a parent */
+		readonly mountOffset: CFrame | undefined;
 	}
 
 	export interface EntityConstructor {
@@ -193,7 +218,7 @@ declare namespace Chrono {
 		ResumeReplication: (entity: Entity) => void;
 
 		/** Pushes a new CFrame snapshot at the given time */
-		Push: (entity: Entity, time: number, value: CFrame) => boolean;
+		Push: (entity: Entity, time: number, value: CFrame, velocity?: Vector3) => boolean;
 
 		/** Gets the interpolated CFrame at a specific time */
 		GetAt: (entity: Entity, time: number) => CFrame | undefined;
@@ -218,6 +243,12 @@ declare namespace Chrono {
 
 		/** Unlocks native server CFrame replication */
 		UnlockNativeServerCFrameReplication: (entity: Entity) => void;
+
+		/** Gets the current model replication type */
+		GetModelReplicationType: (entity: Entity) => "NATIVE" | "CUSTOM" | "NATIVE_WITH_LOCK";
+
+		/** Sets a custom primary part attribute on a model for Chrono interpolation */
+		setModelPrimaryForChrono: (model: Model, primaryName: string) => void;
 
 		/** Destroys an entity */
 		Destroy: (entity: Entity) => void;
@@ -366,7 +397,7 @@ declare namespace Chrono {
 	/** Server clock utilities (Server only) */
 	namespace ServerClock {
 		/** Stores clock synchronization data for a player */
-		function Store(player: Player, clientClockTime: number): void;
+		function Store(player: Player, clientClockTime: number, clientServerTimeNow?: number): void;
 
 		/** Converts a clock value between server and client time */
 		function ConvertTo(player: Player, clock: number, environment: "Server" | "Client"): number;
