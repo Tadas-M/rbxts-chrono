@@ -8,7 +8,23 @@
       "WebFetch(domain:parihsz.github.io)",
       "Bash(gh api:*)",
       "Bash(python3 -c ':*)",
-      "Bash(gh auth:*)"
+      "Bash(gh auth:*)",
+      "Bash(curl -sL https://raw.githubusercontent.com/Parihsz/Chrono/main/src/Shared/Config.luau)",
+      "Bash(curl -sL 'https://api.github.com/repos/Parihsz/Chrono/compare/v2.0.0-experimental...v2.0.4')",
+      "Bash(curl -sL https://raw.githubusercontent.com/Parihsz/Chrono/main/src/Shared/Entity.luau)",
+      "Bash(curl -sL https://raw.githubusercontent.com/Parihsz/Chrono/main/src/Shared/Types.luau)",
+      "Bash(curl -sL https://api.github.com/repos/Parihsz/Chrono/contents/docs/reference)",
+      "Bash(curl -sL https://raw.githubusercontent.com/Parihsz/Chrono/master/src/Shared/Config.luau)",
+      "Bash(curl -sL https://raw.githubusercontent.com/Parihsz/Chrono/master/src/Shared/Types.luau)",
+      "Bash(curl -sL https://raw.githubusercontent.com/Parihsz/Chrono/master/src/init.luau)",
+      "Bash(curl -sL https://api.github.com/repos/Parihsz/Chrono/branches)",
+      "Bash(curl -sL 'https://api.github.com/repos/Parihsz/Chrono/commits/3249ac1')",
+      "Bash(curl -sL 'https://api.github.com/repos/Parihsz/Chrono/commits/55d1a5c')",
+      "Bash(curl -sL 'https://api.github.com/repos/Parihsz/Chrono/commits/07a11e0')",
+      "Bash(curl -sL 'https://api.github.com/repos/Parihsz/Chrono/commits/7945795')",
+      "Bash(curl -sL 'https://raw.githubusercontent.com/Parihsz/Chrono/master/src/Shared/Types.luau')",
+      "Bash(curl -sL 'https://raw.githubusercontent.com/Parihsz/Chrono/master/src/Shared/Config.luau')",
+      "Bash(curl -sL 'https://raw.githubusercontent.com/Parihsz/Chrono/master/src/Shared/Entity.luau')"
     ]
   }
 }

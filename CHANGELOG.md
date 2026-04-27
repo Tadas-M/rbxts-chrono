@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.0.4 (2026-04-27)
+
+Tracks chrono-lua patch releases v2.0.1 → v2.0.4.
+
+### Breaking Changes
+
+- **`Entity.setModelPrimaryForChrono` moved to `Config.SetModelPrimaryForChrono`** — Matches the upstream rename in chrono-lua v2.0.2. Update call sites from `Chrono.Entity.setModelPrimaryForChrono(model, name)` to `Chrono.Config.SetModelPrimaryForChrono(model, name)`.
+
+### New Features
+
+- **`Config.RegisterEntityModel` accepts `false` for the `model` parameter** — Register a data-only entity type with no physical model (chrono-lua v2.0.3).
+- **`Entity.interpolation`** — New writable boolean field on entities controlling whether automatic client-side interpolation runs. Defaults to `true` on the client, `false` on the server.
+- **`Config.FLAGS`** — Exposed runtime feature flags table (`SNAPSHOT_INTERPOLATION_FIX`, `SET_CFRAME_FIX`).
+
+### Internal
+
+- Updated `chrono-lua` dependency from `v2.0.0` to `v2.0.4`.
+- JSDoc note added to `Entity.SetCFrame` documenting the new teleport-timestamp / snapshot-clear semantics introduced by the `SET_CFRAME_FIX` flag.
+
 ## 2.0.0 (2026-04-10)
 
 Stable release — migrated from `2.0.0-experimental` to match Chrono v2.0.0.

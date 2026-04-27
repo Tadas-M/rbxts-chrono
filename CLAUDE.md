@@ -30,4 +30,4 @@ When updating types to match new Chrono versions:
 1. Reference the [Chrono documentation](https://parihsz.github.io/Chrono/) and source code
 2. All types are declared in a single `index.d.ts` file using `declare namespace Chrono`
 3. Use TypeScript function overloads for methods that accept different parameter combinations (see `Config.SetConfig` or `Entity.GetEvent`)
-4. The package targets Chrono v2.0.0-experimental - version is tracked in both `package.json` and the JSDoc header in `index.d.ts`
+4. The package targets Chrono v2.0.4 - version is tracked in both `package.json` and the JSDoc header in `index.d.ts`

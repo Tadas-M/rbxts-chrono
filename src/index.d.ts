@@ -1,5 +1,5 @@
 /**
- * TypeScript definitions for Chrono v2.0.0
+ * TypeScript definitions for Chrono v2.0.4
  * Custom Character Replication for Roblox
  * @see https://github.com/Parihsz/Chrono
  */
@@ -152,6 +152,9 @@ declare namespace Chrono {
 		/** Whether position updates automatically */
 		readonly autoUpdatePosition: boolean;
 
+		/** Whether automatic interpolation runs for this entity (client-side). */
+		interpolation: boolean;
+
 		/** The broad phase size used for frustum culling */
 		readonly broadPhase: Vector3 | undefined;
 
@@ -232,7 +235,12 @@ declare namespace Chrono {
 		/** Gets the current CFrame */
 		GetCFrame: (entity: Entity) => CFrame | undefined;
 
-		/** Sets the current CFrame */
+		/**
+		 * Teleports the entity to the given CFrame. On server / network-owner
+		 * contexts marks an internal teleport timestamp so client interpolation
+		 * snaps rather than easing through. On non-owner clients clears the
+		 * snapshot buffer.
+		 */
 		SetCFrame: (entity: Entity, cframe: CFrame) => void;
 
 		/** Gets the primary part of the model */
@@ -246,9 +254,6 @@ declare namespace Chrono {
 
 		/** Gets the current model replication type */
 		GetModelReplicationType: (entity: Entity) => "NATIVE" | "CUSTOM" | "NATIVE_WITH_LOCK";
-
-		/** Sets a custom primary part attribute on a model for Chrono interpolation */
-		setModelPrimaryForChrono: (model: Model, primaryName: string) => void;
 
 		/** Destroys an entity */
 		Destroy: (entity: Entity) => void;
@@ -351,8 +356,27 @@ declare namespace Chrono {
 		/** Registers a custom entity type configuration */
 		function RegisterEntityType(name: string, config: EntityConfigInput): void;
 
-		/** Registers a model for an entity type */
-		function RegisterEntityModel(name: string, model: Model | BasePart, broadPhase?: Vector3): void;
+		/**
+		 * Registers a model for an entity type. Pass `false` as the model to register
+		 * a data-only entity type with no physical model.
+		 */
+		function RegisterEntityModel(
+			name: string,
+			model: Model | BasePart | false,
+			broadPhase?: Vector3,
+		): void;
+
+		/** Sets a custom primary part attribute on a model for Chrono interpolation. */
+		function SetModelPrimaryForChrono(model: Model, primaryName: string): void;
+
+		/**
+		 * Runtime feature flags. These are toggled internally per chrono-lua version.
+		 * User code may read them but should generally not mutate them.
+		 */
+		const FLAGS: {
+			SNAPSHOT_INTERPOLATION_FIX: boolean;
+			SET_CFRAME_FIX: boolean;
+		};
 	}
 
 	/** Replication rules for controlling entity visibility */
