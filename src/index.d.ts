@@ -1,5 +1,5 @@
 /**
- * TypeScript definitions for Chrono v2.0.4
+ * TypeScript definitions for Chrono v2.1.4
  * Custom Character Replication for Roblox
  * @see https://github.com/Parihsz/Chrono
  */
@@ -9,11 +9,11 @@ declare namespace Chrono {
 	export type ModelReplicationMode = "NATIVE" | "NATIVE_WITH_LOCK" | "CUSTOM";
 	export type PlayerReplicationMode = "AUTOMATIC" | "CUSTOM";
 	export type ReplicationFilterMode = "NONE" | "PLAYER_ENTITIES" | "PLAYER_CHARACTERS";
+	export type WarningLevel = "NONE" | "LOW" | "MEDIUM" | "HIGH";
 
 	export type ConfigName =
 		| "MIN_BUFFER"
 		| "MAX_BUFFER"
-		| "SHOW_WARNINGS"
 		| "MAX_SNAPSHOT_COUNT"
 		| "CHECK_NEW_VERSION"
 		| "DEFAULT_NORMAL_TICK_DISTANCE"
@@ -22,7 +22,10 @@ declare namespace Chrono {
 		| "PLAYER_REPLICATION"
 		| "REPLICATE_DEATHS"
 		| "REPLICATE_CFRAME_SETTERS"
-		| "MAX_TOTAL_BYTES_PER_FRAME_PER_PLAYER";
+		| "MAX_TOTAL_BYTES_PER_FRAME_PER_PLAYER"
+		| "WARNING_SEVERITY"
+		| "GRID_UPDATE_INTERVAL"
+		| "GRID_MAX_UPDATE_TIME";
 
 	export type EntityEventName =
 		| "Destroying"
@@ -41,7 +44,6 @@ declare namespace Chrono {
 	export interface ConfigValueMap {
 		MIN_BUFFER: number;
 		MAX_BUFFER: number;
-		SHOW_WARNINGS: boolean;
 		MAX_SNAPSHOT_COUNT: number;
 		CHECK_NEW_VERSION: boolean;
 		DEFAULT_NORMAL_TICK_DISTANCE: number;
@@ -51,6 +53,9 @@ declare namespace Chrono {
 		REPLICATE_DEATHS: ReplicationFilterMode;
 		REPLICATE_CFRAME_SETTERS: ReplicationFilterMode;
 		MAX_TOTAL_BYTES_PER_FRAME_PER_PLAYER: number;
+		WARNING_SEVERITY: WarningLevel;
+		GRID_UPDATE_INTERVAL: number;
+		GRID_MAX_UPDATE_TIME: number;
 	}
 
 	export interface Connection {
@@ -64,6 +69,12 @@ declare namespace Chrono {
 		Wait(defer?: boolean): LuaTuple<Parameters<T>>;
 	}
 
+	export interface ChronoSignal<T extends Callback = Callback> {
+		Fire(...args: Parameters<T>): void;
+		DisconnectAll(): void;
+		Event: ChronoEvent<T>;
+	}
+
 	export interface SnapshotData<Value, Velocity> {
 		t: number;
 		value: Value;
@@ -73,6 +84,7 @@ declare namespace Chrono {
 	export interface Snapshot<Value, Velocity> {
 		Push(timeStamp: number, value: Value, velocity: Velocity): void;
 		GetLatest(): SnapshotData<Value, Velocity> | undefined;
+		/** Gets the interpolated value at a time. A negative `at` returns the latest value. */
 		GetAt(at: number, bypassLock?: boolean): Value | undefined;
 		Clear(): void;
 	}
@@ -84,9 +96,13 @@ declare namespace Chrono {
 		AUTO_UPDATE_POSITION?: boolean;
 		STORE_SNAPSHOTS?: boolean;
 		MODEL_REPLICATION_MODE?: ModelReplicationMode;
+		/** If true, checks that the primary part is the assembly root part of the model. */
+		ASSEMBLY_ROOT_PART_CHECK?: boolean;
 		NORMAL_TICK_DISTANCE?: number;
 		HALF_TICK_DISTANCE?: number;
 		CUSTOM_INTERPOLATION?: boolean;
+		/** If explicitly false, Chrono will not attach model metadata. Defaults to true. */
+		ATTACH_MODEL_META_DATA?: boolean;
 	}
 
 	export interface ClientStats {
@@ -211,6 +227,12 @@ declare namespace Chrono {
 		/** Sets the network owner (player who controls this entity) */
 		SetNetworkOwner: (entity: Entity, player?: Player) => void;
 
+		/**
+		 * Resyncs the ownership status of an entity and its model. Useful if
+		 * Roblox resets the parts' network ownership. (Server only)
+		 */
+		SyncOwnerShip: (entity: Entity) => void;
+
 		/** Clears the entity's snapshot buffer */
 		Clear: (entity: Entity) => void;
 
@@ -226,7 +248,7 @@ declare namespace Chrono {
 		/** Gets the interpolated CFrame at a specific time */
 		GetAt: (entity: Entity, time: number) => CFrame | undefined;
 
-		/** Gets the target render time for interpolation */
+		/** Gets the target render time for interpolation. Returns -1 when no render cache is configured. */
 		GetTargetRenderTime: (entity: Entity) => number;
 
 		/** Sets whether position updates automatically */
@@ -289,6 +311,27 @@ declare namespace Chrono {
 		filterPlayers?: Player[];
 	}
 
+	/** Per-player table tracking which entities are currently replicated to that player (Server only) */
+	export interface PlayerEntityHolder {
+		/** The player this holder belongs to */
+		readonly PLAYER: Player;
+
+		/** Entities replicating at half tick rate for this player */
+		readonly HALF: Entity[];
+
+		/** Entities replicating at normal tick rate for this player */
+		readonly NORMAL: Entity[];
+
+		/** Set of all entities currently replicated to this player */
+		readonly REPLICATED: ReadonlyMap<Entity, true>;
+
+		/** Fires when an entity starts being replicated to this player */
+		readonly EntityAdded: ChronoSignal<(entity: Entity) => void>;
+
+		/** Fires when an entity stops being replicated to this player */
+		readonly EntityRemoving: ChronoSignal<(entity: Entity) => void>;
+	}
+
 	// ===== Functions and Values =====
 
 	/** Starts the Chrono system */
@@ -346,6 +389,9 @@ declare namespace Chrono {
 
 		/** Fires when a player loses ownership of an entity */
 		const PlayerOwnedRemoved: ChronoEvent<(player: Player, entity: Entity) => void>;
+
+		/** Fires when an entity's mount parent changes (undefined when unmounted) */
+		const EntityMountChanged: ChronoEvent<(entity: Entity, mountParentId: number | undefined) => void>;
 	}
 
 	/** Configuration functions */
@@ -369,13 +415,24 @@ declare namespace Chrono {
 		/** Sets a custom primary part attribute on a model for Chrono interpolation. */
 		function SetModelPrimaryForChrono(model: Model, primaryName: string): void;
 
+		/** Sets the warning severity level (equivalent to setting the WARNING_SEVERITY config). */
+		function SetWarningSeverity(level: WarningLevel): void;
+
 		/**
-		 * Runtime feature flags. These are toggled internally per chrono-lua version.
-		 * User code may read them but should generally not mutate them.
+		 * Runtime feature flags, all enabled by default. May be toggled to
+		 * revert to pre-fix behavior, e.g. `Config.FLAGS.FIX_TELEPORT_JITTER = false`.
 		 */
 		const FLAGS: {
+			/** Fixes velocity calculation on the server when two packets are received next to each other */
+			SERVER_VELOCITY_FIX: boolean;
+			/** Fixes velocity calculation when dt is less than the tick rate */
+			VELOCITY_CALC_FIX: boolean;
+			/** Fixes interpolation of snapshots when replication is stopped briefly and resumed rapidly */
 			SNAPSHOT_INTERPOLATION_FIX: boolean;
+			/** Adds a teleport flag to packets */
 			SET_CFRAME_FIX: boolean;
+			/** Resolves jitter (bouncing) when clearing snapshots then setting a CFrame / teleporting */
+			FIX_TELEPORT_JITTER: boolean;
 		};
 	}
 
@@ -405,8 +462,20 @@ declare namespace Chrono {
 		/** Server-side statistics */
 		const SERVER: ServerStats;
 
-		/** Permission map for stat replication (user IDs to boolean) */
-		let REPLICATE_PERMISSIONS: Map<number, boolean> | undefined;
+		/**
+		 * Permission map for stat replication (user IDs to boolean). Prefer
+		 * ReplicateStatsForPlayer/StopReplicatingStatsForPlayer over mutating this directly.
+		 */
+		const REPLICATE_PERMISSIONS: Map<number, boolean>;
+
+		/** Checks whether stats replicate to the given player */
+		function HasPermissionToReplicate(userId: number | Player): boolean;
+
+		/** Grants a player permission to receive server stats (Server only) */
+		function ReplicateStatsForPlayer(userId: number | Player): void;
+
+		/** Revokes a player's permission to receive server stats (Server only) */
+		function StopReplicatingStatsForPlayer(userId: number | Player): void;
 	}
 
 	/** Server-side receiver middleware (Server only) */
@@ -428,6 +497,15 @@ declare namespace Chrono {
 
 		/** Removes clock data for a player */
 		function Remove(player: Player): void;
+	}
+
+	/** Tracks which entities are replicated to each player and manages per-player entity holders (Server only) */
+	namespace EntityGrid {
+		/** Gets the PlayerEntityHolder for a player, or undefined if the player has not loaded yet */
+		function GetEntityHolder(player: Player): PlayerEntityHolder | undefined;
+
+		/** Updates the position used for proximity-based replication culling for the given player */
+		function UpdatePlayerPosition(player: Player, position: Vector3): void;
 	}
 
 	/** Snapshot utilities */

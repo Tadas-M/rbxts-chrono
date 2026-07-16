@@ -37,6 +37,7 @@ if IS_SERVER then
 	local Server = ChronoSrc.Server
 	Chrono.Receiver = require(Server.Receiver)
 	Chrono.ServerClock = require(Server.ServerClock)
+	Chrono.EntityGrid = require(Server.EntityGrid)
 end
 
 return Chrono
