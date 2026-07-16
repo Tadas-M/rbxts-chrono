@@ -31,3 +31,4 @@ When updating types to match new Chrono versions:
 2. All types are declared in a single `index.d.ts` file using `declare namespace Chrono`
 3. Use TypeScript function overloads for methods that accept different parameter combinations (see `Config.SetConfig` or `Entity.GetEvent`)
 4. The package targets Chrono v2.1.4 - version is tracked in both `package.json` and the JSDoc header in `index.d.ts`
+5. [docs/chrono-documentation.md](docs/chrono-documentation.md) is the canonical Chrono reference for all consuming projects (the user's global `chrono` skill points at it) - update it alongside version bumps, including its "Migrating" section
