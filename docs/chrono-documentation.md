@@ -1,12 +1,13 @@
 # Chrono Replication Library - Comprehensive Documentation
 
-> **Version**: 2.1.4
+> **Version**: 2.1.6
 > **Purpose**: Custom character/entity replication system for Roblox
 > **Author**: Parihsz (GitHub)
 >
 > This is the canonical reference for all projects consuming Chrono (via `rbxts-chrono` /
 > `chrono-lua`). A consuming project may have an older version installed — check its
 > `package.json` before relying on version-specific behavior. See
+> [Migrating 2.1.4 → 2.1.6](#migrating-214--216) and
 > [Migrating 2.0.4 → 2.1.4](#migrating-204--214) at the end.
 
 ## Table of Contents
@@ -20,7 +21,8 @@
 8. [Network Protocol](#network-protocol)
 9. [Performance Optimizations](#performance-optimizations)
 10. [API Reference](#api-reference)
-11. [Migrating 2.0.4 → 2.1.4](#migrating-204--214)
+11. [Migrating 2.1.4 → 2.1.6](#migrating-214--216)
+12. [Migrating 2.0.4 → 2.1.4](#migrating-204--214)
 
 ---
 
@@ -181,7 +183,7 @@ Chrono.Config.RegisterEntityType("GROUND_ENEMY", {
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `TICK_RATE` | number | — (required) | Seconds between updates (e.g., 1/20 = 20 Hz) |
-| `BUFFER` | number | — (required) | Interpolation delay in seconds |
+| `BUFFER` | number | — (required) | Interpolation delay in seconds. `0` → dynamic (adaptive) buffer for server-owned entities (2.1.6+); client-owned entities always use a dynamic buffer |
 | `FULL_ROTATION` | boolean | false | Send all 3 rotation axes vs yaw-only |
 | `AUTO_UPDATE_POSITION` | boolean | true | Auto-read CFrame from model each tick |
 | `STORE_SNAPSHOTS` | boolean | false | Store snapshots on server for server-owned entities |
@@ -195,7 +197,13 @@ Chrono.Config.RegisterEntityType("GROUND_ENEMY", {
 **Built-in entity types:**
 - `DEFAULT`: TICK_RATE = 1/20, BUFFER = 0.1
 - `WITH_ROT`: DEFAULT + FULL_ROTATION
-- `PLAYER`: NATIVE mode, TICK_RATE = 1/20, dynamic buffer, `ASSEMBLY_ROOT_PART_CHECK = true`
+- `PLAYER`: NATIVE mode, TICK_RATE = 1/20, dynamic buffer, `ASSEMBLY_ROOT_PART_CHECK = true`, `HALF_TICK_DISTANCE = math.huge` (2.1.6+: players stay replicated at all distances, matching Roblox's default behavior)
+
+**Changing buffers at runtime (client, 2.1.6+):**
+- Per entity: `Chrono.Entity.SetClockBuffer(entity, seconds)` overrides one entity's buffer.
+- Per entity type: `Chrono.Config.GetEntityType(name):UpdateBuffer(seconds)` updates every
+  entity of that type (shared clocks and owned per-entity clocks), except entities with their
+  own `SetClockBuffer` override. Pass `0` for a dynamic buffer.
 
 ### Model Registration
 
@@ -211,6 +219,8 @@ Chrono.Config.RegisterEntityModel("ZOMBIE", zombieModel, Vector3.new(4, 6, 4))
 ## Entity System
 
 ### Creating Entities
+
+> **2.1.6+:** `Entity.new` errors if called before `Chrono.Start()`.
 
 ```lua
 -- Server-side
@@ -257,6 +267,7 @@ All entity methods are called as `Chrono.Entity.MethodName(entity, ...)`:
 |--------|-------------|
 | `SetModel(entity, model, mode?, noDestroy?)` | Change the model |
 | `SetConfig(entity, configName)` | Change entity configuration |
+| `SetClockBuffer(entity, buffer?)` | Per-entity interpolation buffer override (client only, 2.1.6+; see notes below) |
 | `SetBroadPhase(entity, vector?)` | Set frustum culling bounds |
 | `GetData(entity)` | Get custom user data |
 | `SetData(entity, data)` | Set custom user data (replicated) |
@@ -285,6 +296,7 @@ All entity methods are called as `Chrono.Entity.MethodName(entity, ...)`:
 - **`SetCFrame(entity, cframe)`**: Marks a teleport so client interpolation snaps rather than easing through (see `SET_CFRAME_FIX` / `FIX_TELEPORT_JITTER` flags). On non-owner clients it clears the snapshot buffer. Use for teleportation.
 - **`Push(entity, time, cframe, velocity?)`**: Returns `true` if this snapshot is the newest in the buffer. Use for continuous movement updates.
 - **`SetNetworkOwner(entity, player?)`**: Clears the snapshot buffer and recreates the ClientClock. This ensures clean state when ownership transfers.
+- **`SetClockBuffer(entity, buffer?)`** (client only — errors on the server, 2.1.6+): Sets a per-entity interpolation buffer, creating a dedicated client clock for the entity. Overrides the config's `BUFFER` and is unaffected by later `config:UpdateBuffer` calls. Pass `0` (or negative) for a dynamic buffer; pass `nil` to clear the override and fall back to the config's buffer. Intended for client-owned entities — for server-owned entities prefer `Config.GetEntityType(name):UpdateBuffer(seconds)`.
 
 ### Entity Events
 
@@ -449,6 +461,10 @@ deviation = deviation + (|latency - lastLatency| - deviation) * 0.1
 -- Clamped between MIN_BUFFER and MAX_BUFFER
 ```
 
+Client-owned entities always use this dynamic buffer. Since 2.1.6, server-owned entities use
+it too when their config's `BUFFER` is `0`, and it can be selected at runtime via
+`Entity.SetClockBuffer(entity, 0)` or `config:UpdateBuffer(0)`.
+
 ---
 
 ## Network Protocol
@@ -565,6 +581,7 @@ Top-level exports: `Start`, `Entity`, `Holder`, `Events`, `Config`, `Replication
 Config.SetConfig(name: ConfigName, value: any)     -- Set global configuration (before Start())
 Config.SetWarningSeverity(level: WarningLevel)     -- "NONE" | "LOW" | "MEDIUM" | "HIGH"
 Config.RegisterEntityType(name: string, config: EntityConfigInput)
+Config.GetEntityType(name: string): EntityConfig  -- 2.1.6+; locked config, has :UpdateBuffer(seconds)
 Config.RegisterEntityModel(name: string, model: Model|BasePart|false, broadPhase?: Vector3)
 Config.SetModelPrimaryForChrono(model: Model, primaryName: string)
 Config.FLAGS: { [string]: boolean }                -- see Feature Flags above
@@ -576,6 +593,7 @@ Config.FLAGS: { [string]: boolean }                -- see Feature Flags above
 Entity.new(config?, model?, mode?, initCFrame?): Entity
 Entity.SetModel(entity, model?, mode?, noDestroy?)
 Entity.SetConfig(entity, configName)
+Entity.SetClockBuffer(entity, buffer?)  -- client only, 2.1.6+
 Entity.SetBroadPhase(entity, broadPhase?)
 Entity.GetData(entity): any
 Entity.SetData(entity, data)
@@ -670,6 +688,7 @@ type PlayerEntityHolder = {
 ```lua
 Stats.CLIENT = { ... }   -- client-side metrics (culling, interpolation time, bandwidth)
 Stats.SERVER = { ... }   -- server-side metrics (ticker time, grid time, bandwidth)
+Stats.SERVER.GRID_STATS  -- 2.1.6+: { [playerName]: { HALF: { entityId }, NORMAL: { entityId } } }
 
 Stats.REPLICATE_PERMISSIONS: { [number]: boolean }
 -- Non-optional map of UserIds allowed to receive server stats.
@@ -705,6 +724,31 @@ ServerClock.Remove(player)
 Snapshots.New(lerpFunction): Snapshot
 -- Create custom snapshot with custom interpolation function
 ```
+
+---
+
+## Migrating 2.1.4 → 2.1.6
+
+No breaking API changes — existing code compiles and runs unchanged, with one exception:
+
+- **`Entity.new` now errors if called before `Chrono.Start()`.** Audit initialization order:
+  any entity created during module load before `Start()` runs will now throw instead of
+  silently misbehaving.
+
+Behavioral changes (compile fine, may affect gameplay/tuning):
+- Built-in `PLAYER` entity type now defaults `HALF_TICK_DISTANCE = math.huge` — player
+  characters stay replicated at all distances (matching Roblox's native behavior). Register a
+  custom config if you relied on distance-based culling of players.
+- `BUFFER = 0` on an entity config now selects a dynamic (adaptive) buffer for server-owned
+  entities. Previously only client-owned entities were dynamic.
+
+New API worth adopting:
+- `Entity.SetClockBuffer(entity, buffer?)` (client only) — per-entity interpolation buffer
+  override; `0` = dynamic, `nil` clears.
+- `Config.GetEntityType(name)` — public access to a locked entity config; call
+  `:UpdateBuffer(seconds)` on it to retune every entity of a type at runtime.
+- `Stats.SERVER.GRID_STATS` — per-player breakdown of entity ids replicating at HALF/NORMAL
+  tick rates, for debugging replication distance tuning.
 
 ---
 
@@ -745,4 +789,4 @@ New API worth adopting:
 
 ---
 
-*Documentation generated from source code analysis of chrono-lua v2.1.4*
+*Documentation generated from source code analysis of chrono-lua v2.1.6*

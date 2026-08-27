@@ -1,5 +1,5 @@
 /**
- * TypeScript definitions for Chrono v2.1.4
+ * TypeScript definitions for Chrono v2.1.6
  * Custom Character Replication for Roblox
  * @see https://github.com/Parihsz/Chrono
  */
@@ -90,6 +90,11 @@ declare namespace Chrono {
 	}
 
 	export interface EntityConfigInput {
+		/**
+		 * Interpolation buffer time in seconds. If set to 0, server-owned
+		 * entities of this type use a dynamic (adaptive) buffer instead.
+		 * Client-owned entities always use a dynamic buffer.
+		 */
 		BUFFER: number;
 		TICK_RATE: number;
 		FULL_ROTATION?: boolean;
@@ -103,6 +108,20 @@ declare namespace Chrono {
 		CUSTOM_INTERPOLATION?: boolean;
 		/** If explicitly false, Chrono will not attach model metadata. Defaults to true. */
 		ATTACH_MODEL_META_DATA?: boolean;
+	}
+
+	/** A locked (registered) entity type configuration, as returned by `Config.GetEntityType`. */
+	export interface EntityConfig extends EntityConfigInput {
+		/** The name this entity type was registered under */
+		readonly NAME: string;
+
+		/**
+		 * Updates the interpolation buffer for every entity of this type (client),
+		 * both the type's shared clocks and per-entity clocks of owned entities.
+		 * Entities with their own `Entity.SetClockBuffer` override are skipped.
+		 * Pass 0 for a dynamic buffer. Errors if called before `Chrono.Start()`.
+		 */
+		UpdateBuffer(buffer: number): void;
 	}
 
 	export interface ClientStats {
@@ -129,6 +148,8 @@ declare namespace Chrono {
 		BYTES_RECEIVED_PER_SEC: number;
 		BYTES_SENT_PER_SEC: number;
 		PACKETS_SENT_PER_SEC: number;
+		/** Per-player (by name) entity ids currently replicated at each tick rate */
+		GRID_STATS: Map<string, { HALF: number[]; NORMAL: number[] }>;
 	}
 
 	export interface Entity {
@@ -175,7 +196,7 @@ declare namespace Chrono {
 		readonly broadPhase: Vector3 | undefined;
 
 		/** The entity configuration */
-		readonly entityConfig: EntityConfigInput;
+		readonly entityConfig: EntityConfig;
 
 		/** The snapshot buffer for this entity */
 		readonly snapshot: Snapshot<CFrame, Vector3> | undefined;
@@ -205,6 +226,16 @@ declare namespace Chrono {
 
 		/** Sets the entity configuration type */
 		SetConfig: (entity: Entity, entityConfig: string) => void;
+
+		/**
+		 * Sets a per-entity interpolation buffer, creating a dedicated client
+		 * clock for this entity. Overrides the entity config's `BUFFER` and is
+		 * unaffected by later `EntityConfig.UpdateBuffer` calls. Pass 0 (or a
+		 * negative value) for a dynamic buffer; pass undefined to clear the
+		 * override and fall back to the config's buffer. (Client only — errors
+		 * on the server.)
+		 */
+		SetClockBuffer: (entity: Entity, buffer?: number) => void;
 
 		/** Sets the broad phase collision bounds */
 		SetBroadPhase: (entity: Entity, broadPhase?: Vector3) => void;
@@ -334,7 +365,10 @@ declare namespace Chrono {
 
 	// ===== Functions and Values =====
 
-	/** Starts the Chrono system */
+	/**
+	 * Starts the Chrono system. Must be called before creating entities —
+	 * as of Chrono v2.1.6, `new Entity()` errors if called before Start.
+	 */
 	function Start(config?: ModuleScript): void;
 
 	/** Entity constructor */
@@ -401,6 +435,12 @@ declare namespace Chrono {
 
 		/** Registers a custom entity type configuration */
 		function RegisterEntityType(name: string, config: EntityConfigInput): void;
+
+		/**
+		 * Gets a registered (locked) entity type configuration by name, e.g. to
+		 * call `UpdateBuffer` on it. Available after `Chrono.Start()`.
+		 */
+		function GetEntityType(name: string): EntityConfig;
 
 		/**
 		 * Registers a model for an entity type. Pass `false` as the model to register

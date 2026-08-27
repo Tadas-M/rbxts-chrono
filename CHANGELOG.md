@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.1.6 (2026-08-27)
+
+Tracks chrono-lua releases v2.1.5 → v2.1.6. No breaking API changes.
+
+### New Features
+
+- **`Entity.SetClockBuffer(entity, buffer?)`** — Client-only per-entity interpolation buffer override; creates a dedicated client clock. Pass `0` (or negative) for a dynamic buffer, `undefined` to clear the override. Errors on the server.
+- **`Config.GetEntityType(name)`** — Public access to a locked entity type config (new `EntityConfig` interface with `NAME` and an `UpdateBuffer(seconds)` method that retunes every entity of the type at runtime; entities with a `SetClockBuffer` override are skipped).
+- **`Stats.SERVER.GRID_STATS`** — Per-player-name map of entity ids replicating at `HALF`/`NORMAL` tick rates.
+
+### Behavioral Changes (upstream, no type impact)
+
+- `Entity.new` now errors if called before `Chrono.Start()`.
+- `BUFFER = 0` on an entity config selects a dynamic (adaptive) buffer for server-owned entities.
+- Built-in `PLAYER` entity type defaults `HALF_TICK_DISTANCE = math.huge` (players replicated at all distances).
+
+### Internal
+
+- `Entity.entityConfig` retyped from `EntityConfigInput` to the new `EntityConfig` (locked config).
+- Updated `chrono-lua` dependency from `v2.1.4` to `v2.1.6`.
+
 ## 2.0.4 (2026-04-27)
 
 Tracks chrono-lua patch releases v2.0.1 → v2.0.4.
