@@ -1,7 +1,7 @@
 {
-  "name": "rbxts-chrono",
+  "name": "@rbxts/chrono",
   "version": "2.1.6",
-  "description": "TypeScript types for Chrono - Custom Character Replication for Roblox",
+  "description": "Chrono (custom character replication for Roblox) packaged for roblox-ts, with TypeScript types",
   "main": "src/init.lua",
   "types": "src/index.d.ts",
   "files": [
@@ -18,6 +18,13 @@
     "character"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tadas-M/rbxts-chrono.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "peerDependencies": {
     "@rbxts/types": "*"
   },

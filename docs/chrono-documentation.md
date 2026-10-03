@@ -4,8 +4,8 @@
 > **Purpose**: Custom character/entity replication system for Roblox
 > **Author**: Parihsz (GitHub)
 >
-> This is the canonical reference for all projects consuming Chrono (via `rbxts-chrono` /
-> `chrono-lua`). A consuming project may have an older version installed — check its
+> This is the canonical reference for all projects consuming Chrono (via the `@rbxts/chrono`
+> npm package, formerly `rbxts-chrono`). A consuming project may have an older version installed — check its
 > `package.json` before relying on version-specific behavior. See
 > [Migrating 2.1.4 → 2.1.6](#migrating-214--216) and
 > [Migrating 2.0.4 → 2.1.4](#migrating-204--214) at the end.
@@ -46,7 +46,7 @@ Chrono is a custom entity replication library designed to replace or augment Rob
 ### File Structure
 
 ```
-chrono-lua/src/
+src/Chrono/                      # Vendored upstream src/ inside @rbxts/chrono
 ├── init.luau                    # Entry point, Start() function, re-exported types
 ├── Shared/                      # Shared between client/server
 │   ├── Types.luau              # Type definitions
@@ -573,7 +573,7 @@ Chrono.Start(config?: ModuleScript)
 
 Top-level exports: `Start`, `Entity`, `Holder`, `Events`, `Config`, `ReplicationRules`,
 `Stats`, `Snapshots`, and (server-only) `ServerClock`, `ServerReceiver`, `Player`, `EntityGrid`.
-(In `rbxts-chrono`, `ServerReceiver` is exposed as `Chrono.Receiver`.)
+(In `@rbxts/chrono`, `ServerReceiver` is exposed as `Chrono.Receiver`.)
 
 ### Chrono.Config
 

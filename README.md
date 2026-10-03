@@ -1,17 +1,17 @@
-# rbxts-chrono
+# @rbxts/chrono
 
-TypeScript type definitions for [Chrono](https://github.com/Parihsz/Chrono) - a custom character replication library for Roblox.
+[Chrono](https://github.com/Parihsz/Chrono) - a custom character replication library for Roblox - packaged for roblox-ts with TypeScript types. The Luau runtime is bundled, so no extra Rojo configuration is needed.
 
 ## Installation
 
 ```bash
-npm install rbxts-chrono
+npm install @rbxts/chrono
 ```
 
 ## Usage
 
 ```typescript
-import Chrono from "rbxts-chrono";
+import Chrono from "@rbxts/chrono";
 
 // Start Chrono
 Chrono.Start();
