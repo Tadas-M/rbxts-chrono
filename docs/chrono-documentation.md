@@ -1,12 +1,13 @@
 # Chrono Replication Library - Comprehensive Documentation
 
-> **Version**: 2.1.6
+> **Version**: 2.2.0
 > **Purpose**: Custom character/entity replication system for Roblox
 > **Author**: Parihsz (GitHub)
 >
 > This is the canonical reference for all projects consuming Chrono (via the `@rbxts/chrono`
 > npm package, formerly `rbxts-chrono`). A consuming project may have an older version installed — check its
 > `package.json` before relying on version-specific behavior. See
+> [Migrating 2.1.6 → 2.2.0](#migrating-216--220),
 > [Migrating 2.1.4 → 2.1.6](#migrating-214--216) and
 > [Migrating 2.0.4 → 2.1.4](#migrating-204--214) at the end.
 
@@ -21,8 +22,9 @@
 8. [Network Protocol](#network-protocol)
 9. [Performance Optimizations](#performance-optimizations)
 10. [API Reference](#api-reference)
-11. [Migrating 2.1.4 → 2.1.6](#migrating-214--216)
-12. [Migrating 2.0.4 → 2.1.4](#migrating-204--214)
+11. [Migrating 2.1.6 → 2.2.0](#migrating-216--220)
+12. [Migrating 2.1.4 → 2.1.6](#migrating-214--216)
+13. [Migrating 2.0.4 → 2.1.4](#migrating-204--214)
 
 ---
 
@@ -34,6 +36,7 @@ Chrono is a custom entity replication library designed to replace or augment Rob
 - **Distance-based tick rates** (full/half/none) for bandwidth optimization
 - **Client-owned entity support** with server validation
 - **Hermite interpolation** for smooth movement on clients
+- **Interpolation modes** (`CFRAME` / `ALIGN` / `NONE`) — `ALIGN` lets physics move the entity, for ragdolls (2.2.0+)
 - **Frustum culling** to skip rendering off-screen entities
 - **Entity mounting** for parent-child CFrame relationships (applied on both server and client)
 - **Replication rules** for per-entity visibility control
@@ -65,6 +68,7 @@ src/Chrono/                      # Vendored upstream src/ inside @rbxts/chrono
 │   ├── Stats.luau              # Performance metrics + debugger replication
 │   ├── Warn.luau               # Severity-levelled warnings
 │   ├── Bin.luau                # Cleanup utility
+│   ├── AlignDriver.luau        # AlignPosition/AlignOrientation driver for ALIGN mode (2.2.0+)
 │   └── FastStackPlus.luau      # Stack data structure
 ├── Server/
 │   ├── Replicate.luau          # Main server replication loop (PostSimulation)
@@ -136,8 +140,9 @@ Set via `Chrono.Config.SetConfig(name, value)` **before** calling `Chrono.Start(
 | `DEFAULT_NORMAL_TICK_DISTANCE` | number | 50 | Distance for full tick rate |
 | `DEFAULT_HALF_TICK_DISTANCE` | number | 100 | Distance for half tick rate (beyond = no replication) |
 | `DEFAULT_MODEL_REPLICATION_MODE` | string | "NATIVE" | Default model mode |
+| `DEFAULT_INTERPOLATION_MODE` | string | "CFRAME" | How clients apply interpolated transforms: "CFRAME", "ALIGN", "NONE" (2.2.0+; see [Interpolation Modes](#interpolation-modes)) |
 | `PLAYER_REPLICATION` | string | "AUTOMATIC" | Auto-register player characters |
-| `REPLICATE_DEATHS` | string | "PLAYER_ENTITIES" | Death replication filter |
+| `REPLICATE_DEATHS` | string | "PLAYER_CHARACTERS" | Death replication filter |
 | `REPLICATE_CFRAME_SETTERS` | string | "PLAYER_ENTITIES" | CFrame setter replication filter |
 | `MAX_TOTAL_BYTES_PER_FRAME_PER_PLAYER` | number | 300 | **Baseline** rate limit; effective budget scales +21 bytes per client-owned entity |
 | `GRID_UPDATE_INTERVAL` | number | 0.1 | Seconds between entity grid updates |
@@ -175,6 +180,7 @@ Chrono.Config.RegisterEntityType("GROUND_ENEMY", {
     NORMAL_TICK_DISTANCE = 75,
     HALF_TICK_DISTANCE = 150,
     CUSTOM_INTERPOLATION = false, -- Disable auto-interpolation (default false)
+    INTERPOLATION_MODE = "CFRAME", -- 2.2.0+; defaults to DEFAULT_INTERPOLATION_MODE
 })
 ```
 
@@ -190,13 +196,14 @@ Chrono.Config.RegisterEntityType("GROUND_ENEMY", {
 | `MODEL_REPLICATION_MODE` | string | - | "NATIVE", "NATIVE_WITH_LOCK", or "CUSTOM" |
 | `NORMAL_TICK_DISTANCE` | number | 50 | Distance threshold for full tick rate |
 | `HALF_TICK_DISTANCE` | number | 100 | Distance threshold for half tick rate |
-| `CUSTOM_INTERPOLATION` | boolean | false | Disable automatic interpolation |
+| `CUSTOM_INTERPOLATION` | boolean | false | Disable automatic interpolation for the whole type; fixed at runtime. Prefer `SetInterpolationMode(entity, "NONE")` |
+| `INTERPOLATION_MODE` | string | `DEFAULT_INTERPOLATION_MODE` | Per-type interpolation mode override (2.2.0+) |
 | `ASSEMBLY_ROOT_PART_CHECK` | boolean | false | Verify the primary part is the assembly root part (or inside the model) |
 | `ATTACH_MODEL_META_DATA` | boolean | true | Set explicitly false to stop Chrono attaching model metadata (see Shared/ModelHelper) |
 
 **Built-in entity types:**
 - `DEFAULT`: TICK_RATE = 1/20, BUFFER = 0.1
-- `WITH_ROT`: DEFAULT + FULL_ROTATION
+- `WITH_ROT`: `PLAYER` + `FULL_ROTATION = true` (2.2.0+; NATIVE mode, dynamic buffer, `ASSEMBLY_ROOT_PART_CHECK = true`, `HALF_TICK_DISTANCE = math.huge`). Before 2.2.0 it was DEFAULT + FULL_ROTATION (`BUFFER = 0.1`). Intended as the profile to switch a ragdolled player to
 - `PLAYER`: NATIVE mode, TICK_RATE = 1/20, dynamic buffer, `ASSEMBLY_ROOT_PART_CHECK = true`, `HALF_TICK_DISTANCE = math.huge` (2.1.6+: players stay replicated at all distances, matching Roblox's default behavior)
 
 **Changing buffers at runtime (client, 2.1.6+):**
@@ -288,6 +295,7 @@ All entity methods are called as `Chrono.Entity.MethodName(entity, ...)`:
 | `LockNativeServerCFrameReplication(entity)` | Lock server-side CFrame |
 | `UnlockNativeServerCFrameReplication(entity)` | Unlock server-side CFrame |
 | `GetModelReplicationType(entity)` | "NATIVE" \| "CUSTOM" \| "NATIVE_WITH_LOCK" |
+| `SetInterpolationMode(entity, mode)` | "CFRAME" \| "ALIGN" \| "NONE" — per-entity override; replicates from server (2.2.0+) |
 | `Destroy(entity)` | Destroy and unregister |
 | `GetEvent(entity, eventName)` | Get entity event |
 
@@ -362,7 +370,8 @@ All entity methods are called as `Chrono.Entity.MethodName(entity, ...)`:
    - Calculate camera frustum planes
 
 3. For each entity:
-   - Skip if destroyed, mounted, or custom interpolation
+   - Skip if destroyed, mounted, custom interpolation, or mode "NONE"
+   - Defer "ALIGN" entities to the PreSimulation pass below
    - Skip if network owner (we control it)
    - Check frustum culling
    - Get interpolated CFrame at render time
@@ -373,11 +382,50 @@ All entity methods are called as `Chrono.Entity.MethodName(entity, ...)`:
 
 5. Sender.Update()
    - For client-owned entities: serialize and send updates
+
+PreSimulation (2.2.0+):
+   - For each deferred "ALIGN" entity: sample at render time (advanced by the time
+     since Heartbeat) and update its AlignPosition/AlignOrientation targets
 ```
 
 ---
 
 ## Interpolation System
+
+### Interpolation Modes
+
+(2.2.0+) Controls how the client applies the interpolated transform to entities it doesn't own.
+Resolved per entity as `SetInterpolationMode` override → entity type `INTERPOLATION_MODE` →
+`DEFAULT_INTERPOLATION_MODE`.
+
+| Mode | Behavior |
+|------|----------|
+| `CFRAME` (default) | Assigns `primaryPart.CFrame` every frame. Exact and cheapest, but teleports the assembly, discarding physics state. |
+| `ALIGN` | Welds a hidden driver part (`__CHRONO_ALIGN` Camera container under the primary part, `RootPriority = 127`) and drives it with rigid, max-responsiveness `AlignPosition`/`AlignOrientation`. Physics keeps resolving joints and collisions, so ragdolls don't fight replication. Skips `ASSEMBLY_ROOT_PART_CHECK`. |
+| `NONE` | Applies nothing. Snapshots still arrive, so read them with `Entity.GetAt` and move the entity yourself. |
+
+While an entity is in `ALIGN` mode, the server also replicates its Humanoid's current state
+and its enabled/disabled state mask; non-owner clients apply them (`Ragdoll` is applied as
+`Physics`). Leaving `ALIGN` stops this and destroys the driver.
+
+Upstream marks `ALIGN` **experimental** with unknown interactions with other constraints:
+switch to it only while ragdolled and back to `CFRAME` afterwards, rather than as a default.
+
+```lua
+-- server
+local entity = Chrono.Holder.GetEntityFromModel(character)
+Chrono.Entity.SetInterpolationMode(entity, "ALIGN")
+Chrono.Entity.SetConfig(entity, "WITH_ROT")  -- PLAYER has yaw-only rotation
+RAGDOLL(character)
+
+-- on recovery
+UN_RAGDOLL(character)
+Chrono.Entity.SetInterpolationMode(entity, "CFRAME")
+Chrono.Entity.SetConfig(entity, "PLAYER")
+```
+
+`NONE` is the preferred way to stop Chrono driving an entity: it is per entity and can be
+changed at runtime, whereas `CUSTOM_INTERPOLATION` applies to the whole type and is fixed.
 
 ### Snapshot Buffer
 
@@ -614,6 +662,7 @@ Entity.Clear(entity)
 Entity.LockNativeServerCFrameReplication(entity)
 Entity.UnlockNativeServerCFrameReplication(entity)
 Entity.GetModelReplicationType(entity): "NATIVE" | "CUSTOM" | "NATIVE_WITH_LOCK"
+Entity.SetInterpolationMode(entity, "CFRAME" | "ALIGN" | "NONE")  -- 2.2.0+
 Entity.Destroy(entity)
 Entity.GetEvent(entity, eventName): Event
 ```
@@ -727,6 +776,32 @@ Snapshots.New(lerpFunction): Snapshot
 
 ---
 
+## Migrating 2.1.6 → 2.2.0
+
+No breaking API changes — existing code compiles and runs unchanged. The default
+interpolation mode is `CFRAME`, identical to 2.1.6 behavior.
+
+Package change (rbxts consumers):
+- The npm package is now **`@rbxts/chrono`** (was `rbxts-chrono`) and bundles the Chrono
+  Luau runtime. Replace `"@rbxts/chrono": "npm:rbxts-chrono@..."` with
+  `"@rbxts/chrono": "^2.2.0"`, and **delete the `chrono-lua` entry from your Rojo project
+  file** — it is no longer installed or needed. Imports are unchanged.
+
+Behavioral changes (compile fine, may affect gameplay/tuning):
+- Built-in `WITH_ROT` entity type is now `PLAYER` + `FULL_ROTATION`: NATIVE mode, dynamic
+  buffer (`BUFFER = 0`, was `0.1`), `ASSEMBLY_ROOT_PART_CHECK = true`, replicated at all
+  distances. Register your own type if you used `WITH_ROT` for non-player entities.
+- The `NATIVE_WITH_LOCK` locker part's `RootPriority` dropped 127 → 126 so the `ALIGN`
+  driver can outrank it.
+
+New API worth adopting:
+- `Entity.SetInterpolationMode(entity, "CFRAME" | "ALIGN" | "NONE")`, per-type
+  `INTERPOLATION_MODE`, global `DEFAULT_INTERPOLATION_MODE` — see
+  [Interpolation Modes](#interpolation-modes). Use `ALIGN` around ragdolls; use `NONE` instead
+  of `CUSTOM_INTERPOLATION` when you need to drive an entity yourself.
+
+---
+
 ## Migrating 2.1.4 → 2.1.6
 
 No breaking API changes — existing code compiles and runs unchanged, with one exception:
@@ -789,4 +864,4 @@ New API worth adopting:
 
 ---
 
-*Documentation generated from source code analysis of chrono-lua v2.1.6*
+*Documentation generated from source code analysis of Chrono v2.2.0*

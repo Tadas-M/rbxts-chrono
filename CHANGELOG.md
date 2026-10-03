@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.2.0 (2026-10-03)
+
+Tracks Chrono v2.2.0. No breaking API changes.
+
+### Package
+
+- **Renamed to `@rbxts/chrono`** (was `rbxts-chrono`). Consumers that aliased `"@rbxts/chrono": "npm:rbxts-chrono@..."` switch to `"@rbxts/chrono": "^2.2.0"`; imports are unchanged.
+- **Chrono runtime is bundled** in `src/Chrono` instead of the `chrono-lua` GitHub dependency. Remove any `chrono-lua` mapping from your Rojo project file.
+
+### New Features
+
+- **`Entity.SetInterpolationMode(entity, mode)`** — Per-entity override of how clients apply interpolated transforms; replicates from the server.
+- **`InterpolationMode`** type — `"CFRAME" | "ALIGN" | "NONE"`. `ALIGN` (experimental) drives AlignPosition/AlignOrientation so physics moves the entity, for ragdolls; `NONE` applies nothing.
+- **`DEFAULT_INTERPOLATION_MODE`** config (default `"CFRAME"`) and per-type **`INTERPOLATION_MODE`** in `EntityConfigInput`.
+
+### Behavioral Changes (upstream, no type impact)
+
+- Built-in `WITH_ROT` entity type is now `PLAYER` + `FULL_ROTATION` (NATIVE mode, dynamic buffer, `ASSEMBLY_ROOT_PART_CHECK`, replicated at all distances).
+- In `ALIGN` mode the server replicates Humanoid state and enabled-state mask to clients.
+- `NATIVE_WITH_LOCK` locker part `RootPriority` 127 → 126.
+
 ## 2.1.6 (2026-08-27)
 
 Tracks chrono-lua releases v2.1.5 → v2.1.6. No breaking API changes.

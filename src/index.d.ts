@@ -1,5 +1,5 @@
 /**
- * TypeScript definitions for Chrono v2.1.6
+ * TypeScript definitions for Chrono v2.2.0
  * Custom Character Replication for Roblox
  * @see https://github.com/Parihsz/Chrono
  */
@@ -7,6 +7,14 @@
 declare namespace Chrono {
 	// ===== Type Aliases =====
 	export type ModelReplicationMode = "NATIVE" | "NATIVE_WITH_LOCK" | "CUSTOM";
+	/**
+	 * How the client applies interpolated transforms to entities it doesn't own.
+	 * - `CFRAME`: sets the primary part's CFrame directly. Exact and cheapest.
+	 * - `ALIGN`: drives an AlignPosition/AlignOrientation toward the target so physics moves
+	 *   the entity (e.g. ragdolls). Experimental — switch to it only while needed.
+	 * - `NONE`: doesn't apply the transform; snapshots still arrive for `Entity.GetAt`.
+	 */
+	export type InterpolationMode = "CFRAME" | "ALIGN" | "NONE";
 	export type PlayerReplicationMode = "AUTOMATIC" | "CUSTOM";
 	export type ReplicationFilterMode = "NONE" | "PLAYER_ENTITIES" | "PLAYER_CHARACTERS";
 	export type WarningLevel = "NONE" | "LOW" | "MEDIUM" | "HIGH";
@@ -19,6 +27,7 @@ declare namespace Chrono {
 		| "DEFAULT_NORMAL_TICK_DISTANCE"
 		| "DEFAULT_HALF_TICK_DISTANCE"
 		| "DEFAULT_MODEL_REPLICATION_MODE"
+		| "DEFAULT_INTERPOLATION_MODE"
 		| "PLAYER_REPLICATION"
 		| "REPLICATE_DEATHS"
 		| "REPLICATE_CFRAME_SETTERS"
@@ -49,6 +58,7 @@ declare namespace Chrono {
 		DEFAULT_NORMAL_TICK_DISTANCE: number;
 		DEFAULT_HALF_TICK_DISTANCE: number;
 		DEFAULT_MODEL_REPLICATION_MODE: ModelReplicationMode;
+		DEFAULT_INTERPOLATION_MODE: InterpolationMode;
 		PLAYER_REPLICATION: PlayerReplicationMode;
 		REPLICATE_DEATHS: ReplicationFilterMode;
 		REPLICATE_CFRAME_SETTERS: ReplicationFilterMode;
@@ -105,7 +115,13 @@ declare namespace Chrono {
 		ASSEMBLY_ROOT_PART_CHECK?: boolean;
 		NORMAL_TICK_DISTANCE?: number;
 		HALF_TICK_DISTANCE?: number;
+		/**
+		 * Disables Chrono's interpolation for every entity of this type; cannot change at runtime.
+		 * Prefer `Entity.SetInterpolationMode(entity, "NONE")`.
+		 */
 		CUSTOM_INTERPOLATION?: boolean;
+		/** Overrides `DEFAULT_INTERPOLATION_MODE` for this entity type. */
+		INTERPOLATION_MODE?: InterpolationMode;
 		/** If explicitly false, Chrono will not attach model metadata. Defaults to true. */
 		ATTACH_MODEL_META_DATA?: boolean;
 	}
@@ -304,6 +320,12 @@ declare namespace Chrono {
 
 		/** Unlocks native server CFrame replication */
 		UnlockNativeServerCFrameReplication: (entity: Entity) => void;
+
+		/**
+		 * Sets how clients apply interpolated transforms to this entity, overriding the
+		 * entity type's `INTERPOLATION_MODE`. Called on the server, it replicates to all clients.
+		 */
+		SetInterpolationMode: (entity: Entity, mode: InterpolationMode) => void;
 
 		/** Gets the current model replication type */
 		GetModelReplicationType: (entity: Entity) => "NATIVE" | "CUSTOM" | "NATIVE_WITH_LOCK";
