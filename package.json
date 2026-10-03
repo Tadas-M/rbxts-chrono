@@ -6,7 +6,8 @@
   "types": "src/index.d.ts",
   "files": [
     "src",
-    "default.project.json"
+    "default.project.json",
+    "LICENSE-chrono"
   ],
   "keywords": [
     "roblox",
@@ -17,10 +18,10 @@
     "character"
   ],
   "license": "MIT",
-  "dependencies": {
-    "chrono-lua": "github:Parihsz/Chrono#v2.1.6"
-  },
   "peerDependencies": {
     "@rbxts/types": "*"
+  },
+  "scripts": {
+    "sync": "scripts/sync-chrono.sh"
   }
 }

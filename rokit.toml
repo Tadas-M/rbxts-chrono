@@ -1,0 +1,6 @@
+# This file lists tools managed by Rokit, a toolchain manager for Roblox.
+# For more information, see https://github.com/rojo-rbx/rokit
+
+# To add a new tool, add an entry to this table.
+[tools]
+rojo = "rojo-rbx/rojo@7.7.0"
