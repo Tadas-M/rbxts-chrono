@@ -2,9 +2,10 @@ const Warn = require(script.Parent.Parent.Shared.Warn)
 const Config = require(script.Parent.Parent.Shared.Config)
 const Types = require(script.Parent.Parent.Shared.Types)
 
-local MIN_BUFFER
-local MAX_BUFFER
+local MIN_BUFFER: number
+local MAX_BUFFER: number
 const ALPHA = 0.1
+const GAP_DECAY = 0.005
 
 Config._WaitForLock(function()
 	MIN_BUFFER = Config._GetConfig("MIN_BUFFER")
@@ -12,12 +13,15 @@ Config._WaitForLock(function()
 end)
 const Buffer = {}
 
-function Buffer.new(clientClock: Types.ClientClock)
+function Buffer.new(clientClock: Types.ClientClock): Types.InterpolationBuffer
 	return {
 		init = false,
 		averageLatency = 0,
 		deviation = 0,
 		lastLatency = 0,
+		lastSendTime = nil,
+		maxSendGap = 0,
+		idle = false,
 
 		clientClock = clientClock,
 	}
@@ -31,6 +35,20 @@ function Buffer.Register(data: Types.InterpolationBuffer, time: number)
 	if math.abs(latency) > 1 then
 		clientClock:Clear()
 		Warn.low(data.clientClock.name, ` latency too high, cleared cache to repredict in case of error:! {latency}`)
+	end
+
+	const lastSendTime = data.lastSendTime
+	if lastSendTime and time > lastSendTime and not data.idle then
+		const gap = time - lastSendTime
+		if gap <= clientClock.tickRate * 3 then
+			data.maxSendGap = if gap > data.maxSendGap
+				then gap
+				else data.maxSendGap + (gap - data.maxSendGap) * GAP_DECAY
+		end
+	end
+	if not lastSendTime or time > lastSendTime then
+		data.lastSendTime = time
+		data.idle = false
 	end
 
 	if not data.init then
@@ -54,13 +72,22 @@ function Buffer.Register(data: Types.InterpolationBuffer, time: number)
 	data.lastLatency = latency
 end
 
+function Buffer.MarkIdle(data: Types.InterpolationBuffer, time: number)
+	const lastSendTime = data.lastSendTime
+	if lastSendTime and time < lastSendTime then
+		return
+	end
+	data.lastSendTime = time
+	data.idle = true
+end
+
 function Buffer.GetBuffer(data: Types.InterpolationBuffer, tickRate: number)
 	if not data then
 		return MIN_BUFFER
 	end
 
 	const deviationMargin = data.deviation * 2
-	const rawBuffer = tickRate + deviationMargin
+	const rawBuffer = math.max(tickRate, data.maxSendGap) + deviationMargin
 
 	local buffer = if rawBuffer < MIN_BUFFER then MIN_BUFFER + (MIN_BUFFER - rawBuffer) * 0.2 else rawBuffer
 	if buffer > MAX_BUFFER then

@@ -6,7 +6,6 @@ const Entity = require(script.Parent.Entity)
 const Holder = require(script.Parent.Holder)
 const Types = require(script.Parent.Types)
 
-const ShowEntityLocations = true
 const HasDebuggerOpened = {}
 const Stats = {
 	REPLICATE_PERMISSIONS = {
@@ -31,6 +30,7 @@ const Stats = {
 	},
 	--// Server
 	SERVER = {
+		_FORCE = false,
 		_SHOULD_REPLICATE = false,
 		AVG_TICKER_TIME_MS = 0,
 		ENTITY_GRID_UPDATE_TIME_MS = 0,
@@ -54,33 +54,30 @@ const function processID(id: number, replicate)
 	script:SetAttribute(tostring(id), replicate)
 end
 
-function Stats.HasPermissionToReplicate(userId: number | Player)
-	if typeof(userId) == "Instance" and userId:IsA("Player") then
-		userId = userId.UserId
-	end
-	return script:GetAttribute(tostring(userId)) == true
+const function ToUserId(user: number | Player): number
+	return if typeof(user) == "Instance" then user.UserId else user
 end
 
-function Stats.ReplicateStatsForPlayer(userId: number | Player)
+function Stats.HasPermissionToReplicate(user: number | Player)
+	return script:GetAttribute(tostring(ToUserId(user))) == true
+end
+
+function Stats.ReplicateStatsForPlayer(user: number | Player)
 	if RunService:IsClient() then
 		warn("Stats.ReplicateStatsForPlayer should only be called on the server.")
 		return
 	end
-	if typeof(userId) == "Instance" and userId:IsA("Player") then
-		userId = userId.UserId
-	end
+	const userId = ToUserId(user)
 	Stats.REPLICATE_PERMISSIONS[userId] = true
 	processID(userId, true)
 end
 
-function Stats.StopReplicatingStatsForPlayer(userId: number | Player)
+function Stats.StopReplicatingStatsForPlayer(user: number | Player)
 	if RunService:IsClient() then
 		warn("Stats.StopReplicatingStatsForPlayer should only be called on the server.")
 		return
 	end
-	if typeof(userId) == "Instance" and userId:IsA("Player") then
-		userId = userId.UserId
-	end
+	const userId = ToUserId(user)
 	Stats.REPLICATE_PERMISSIONS[userId] = nil
 	processID(userId, false)
 end
@@ -94,7 +91,7 @@ const function updateStat(type: string, name: string, value: any)
 		Config.SetWarningSeverity(value)
 	end
 	if type == "FFLAG" then
-		Config.FLAGS[name] = value
+		(Config.FLAGS :: any)[name] = value
 	end
 end
 
@@ -104,6 +101,11 @@ const StatsRemoteHeaders = {
 	DEBUGGER_OPENED = "DEBUGGER_OPENED",
 	CLIENT_STATS_ACTION = "CLIENT_STATS_ACTION",
 }
+
+function Stats.SetForced(value: boolean)
+	Stats.SERVER._FORCE = value
+	Stats.SERVER._SHOULD_REPLICATE = value
+end
 
 if RunService:IsServer() then
 	const statsRemote = Instance.new("RemoteEvent", script)
@@ -120,7 +122,11 @@ if RunService:IsServer() then
 			end
 		end
 
-		Stats.SERVER._SHOULD_REPLICATE = should
+		Stats.SERVER._SHOULD_REPLICATE = Stats.SERVER._FORCE or should
+	end)
+
+	Players.PlayerRemoving:Connect(function(player)
+		HasDebuggerOpened[player.UserId] = nil
 	end)
 
 	statsRemote.OnServerEvent:Connect(function(plr: Player, header: string, ...)

@@ -15,6 +15,7 @@ const Config = require(Shared.Config)
 const Types = require(Shared.Types)
 const Entity = require(Shared.Entity)
 const EntityGrid = require(script.Parent.EntityGrid)
+const UpdateEntityStats = require(script.Parent.EntityStats)
 const _Player = require(script.Parent.Player)
 const Sender = require(script.Parent.Sender)
 const _Receiver = require(script.Parent.Receiver)
@@ -29,17 +30,35 @@ local lastHeartbeat = 0
 const CLIENT_CLOCK_SYNC_RATE = 60
 local lastClientClockRelay = 0
 
+const POSITION_EPSILON = 0.001
+const ROTATION_EPSILON = 0.001
+
 const tickers: { Types.Ticker } = {}
 
 Config._WaitForLock(function()
+	if not RunService:IsServer() then
+		return
+	end
 	for _, entityConfig in Config._EntityConfigs do
-		if entityConfig.TICKER then
-			table.insert(tickers, entityConfig.TICKER)
+		if entityConfig.ticker then
+			table.insert(tickers, entityConfig.ticker)
 		else
-			Warn.high(entityConfig, "TICKERS not found on server config load")
+			Warn.high(entityConfig, "ticker not found on server config load")
 		end
 	end
 end)
+
+const function HasCFrameChanged(cframe1: CFrame?, cframe2: CFrame?): boolean
+	if cframe1 == cframe2 then
+		return false
+	end
+	if cframe1 == nil or cframe2 == nil then
+		return true
+	end
+	return vector.magnitude((cframe1.Position - cframe2.Position) :: any) > POSITION_EPSILON
+		or vector.magnitude((cframe1.LookVector - cframe2.LookVector) :: any) > ROTATION_EPSILON
+		or vector.magnitude((cframe1.UpVector - cframe2.UpVector) :: any) > ROTATION_EPSILON
+end
 
 const function FireEvent(entity: Types.Entity, eventName: string, ...: any)
 	const events = entity._events
@@ -93,14 +112,15 @@ const function SerializeYaw(b: buffer, cf: CFrame, index: number)
 	return index
 end
 
-const function CFrameChanged(cframe1: CFrame?, cframe2: CFrame?): boolean
-	if cframe1 == cframe2 then
-		return false
+const function SerializeEntityCFrame(id: number, cframe: CFrame, useFull: boolean): buffer
+	const b = buffer.create(if useFull then FULL_BYTES else YAW_BYTES)
+	buffer.writeu16(b, 0, id)
+	if useFull then
+		SerializeFull(b, cframe, 2)
+	else
+		SerializeYaw(b, cframe, 2)
 	end
-	if cframe1 == nil or cframe2 == nil then
-		return true
-	end
-	return cframe1:FuzzyEq(cframe2, 0.0001) == false
+	return b
 end
 
 const function PushLatest(entity: Types.Entity, time: number)
@@ -111,7 +131,7 @@ const function PushLatest(entity: Types.Entity, time: number)
 			return
 		end
 		const cframe = primaryPart.CFrame
-		Entity.Push(entity, time, cframe)
+		Entity._Push(entity, time, cframe)
 	end
 end
 
@@ -119,7 +139,7 @@ const function CheckForChanges(entity: Types.Entity): CFrame?
 	const lastCFrame = entity.lastCheckedCFrame
 	const currentCFrame = entity.latestCFrame
 
-	if CFrameChanged(lastCFrame, currentCFrame) then
+	if HasCFrameChanged(lastCFrame, currentCFrame) then
 		entity.lastCheckedCFrame = currentCFrame
 		return currentCFrame
 	end
@@ -137,6 +157,7 @@ const function CheckEntity(entity: Types.Entity, ticker: Types.Ticker, useFull: 
 	end
 
 	const entityIsHalf = entity.isHalfTicked
+	entity._halfBuffer = nil
 	if (entityIsHalf and not isHalfTick) or entity.paused then
 		entity.cframeBuffer = nil
 		return
@@ -148,25 +169,28 @@ const function CheckEntity(entity: Types.Entity, ticker: Types.Ticker, useFull: 
 	end
 
 	PushLatest(entity, ticker.lastTicked)
+	const previous = entity.lastCheckedCFrame
 	const changes = CheckForChanges(entity)
 
 	if changes then
 		if entity.id == 0 then
-			error("Entity Should not have and id of 0")
+			Warn.high(entity, "has an id of 0, skipping replication")
+			entity.cframeBuffer = nil
+			return
 		end
-		if useFull then
-			const b = buffer.create(FULL_BYTES)
-			buffer.writeu16(b, 0, entity.id)
-			SerializeFull(b, changes, 2)
-			entity.cframeBuffer = b
-		else
-			const b = buffer.create(YAW_BYTES)
-			buffer.writeu16(b, 0, entity.id)
-			SerializeYaw(b, changes, 2)
-			entity.cframeBuffer = b
-		end
+		entity.cframeBuffer = SerializeEntityCFrame(entity.id, changes, useFull)
+		const step = if previous then changes.Position - previous.Position else Vector3.zero
+		Entity._RecordMove(entity, step, (entity._idleTicks or 0) + 1)
 	else
 		entity.cframeBuffer = nil
+		const idleTicks = (entity._idleTicks or 0) + 1
+		entity._idleTicks = idleTicks
+		const resting = entity.lastCheckedCFrame
+		if resting and idleTicks == (entity._stopAfter or 1) then
+			entity.cframeBuffer = SerializeEntityCFrame(entity.id, resting, useFull)
+		elseif resting and isHalfTick and idleTicks == 1 and not entityIsHalf then
+			entity._halfBuffer = SerializeEntityCFrame(entity.id, resting, useFull)
+		end
 	end
 end
 
@@ -174,13 +198,13 @@ const Changes: { Types.Entity } = {}
 
 --In the future we can optimize this so it uses buffers if really needed
 const function CheckEntityChanges()
-	for entity, changes in Entity._Changes do
+	for entity, changes in Holder._entityChangedFields do
 		const newChanges = { id = entity.id, data = {} }
 		for key, data in changes do
-			data = data or entity[key]
+			data = data or (entity :: any)[key]
 			table.insert(newChanges.data, { key, data })
 		end
-		Entity._Changes[entity] = nil
+		Holder._entityChangedFields[entity] = nil
 		entity._changes = newChanges
 		table.insert(Changes, entity)
 	end
@@ -193,17 +217,10 @@ const function UpdateTickers()
 	debug.profilebegin("UpdateTickers")
 	const starts = os.clock()
 	for _, ticker in tickers do
-		if not next(ticker.objects) then
-			continue
-		end
 		debug.profilebegin(`{ticker.config.NAME}`)
 		if Ticker.CheckUpdate(ticker) then
-			--[[ Using the ticker's config instead can help protect if entity configs change mid-game since that
-                could potentially create a desync between the buffer serialization and deserialization
-            ]]
-			--// thought idk if we want to allow that (better to be safe ig for now)
 			const useFull = ticker.config.FULL_ROTATION == true
-			const isHalfTick = ticker.tickedHalf
+			const isHalfTick = ticker.isHalf
 			for _, object in ticker.objects do
 				CheckEntity(object, ticker, useFull, isHalfTick)
 			end
@@ -222,59 +239,14 @@ const function UpdateTickers()
 end
 
 const function UpdatePlayerPositions()
-	for _, entity: Types.Entity in Holder._playerChars do
-		const player = entity.networkOwner
+	for player, entity: Types.Entity in Holder._playerChars do
 		const primaryPart = Entity.GetPrimaryPart(entity)
 		const cframe = primaryPart and primaryPart.CFrame or entity.latestCFrame
 
-		if player and cframe then
+		if cframe then
 			EntityGrid.UpdatePlayerPosition(player, cframe.Position :: any)
 		end
 	end
-end
-
-const function updateEntityStats()
-	const hasOwned = Stats._SHOULD_REPLICATE
-	if not hasOwned then
-		Stats.SERVER_ENTITIES = {}
-		return
-	end
-	const entities: { Types.ServerEntitiesStats } = {}
-
-	for _, entity in Holder.idMap do
-		const networkOwner = entity.networkOwner
-		const isCharacter = entity._player ~= nil
-		const config = entity.entityConfig
-		const configName = config and config.NAME or "DEFAULT"
-		const configTickRate = 1 / config.TICK_RATE
-		const isHalfTicked = entity.isHalfTicked
-		local tickRate = configTickRate
-		const lastPosition = entity.latestCFrame and entity.latestCFrame.Position or nil
-		if isHalfTicked == true then
-			tickRate = tickRate / 2
-		elseif isHalfTicked == nil then
-			tickRate = 0
-		end
-		tickRate //= 1
-		if tickRate ~= tickRate or tickRate == math.huge then
-			tickRate = 0
-		end
-		const lastTicked = entity.latestTime
-		const data = {
-			isPaused = entity.paused,
-			id = entity.id,
-			networkOwner = networkOwner,
-			isCharacter = isCharacter,
-			config = configName,
-			tickRate = tickRate,
-			lastTicked = lastTicked,
-			lastPosition = lastPosition,
-			modelType = Entity.GetModelReplicationType(entity),
-			interpolationMode = entity._interpolationMode or entity.entityConfig.INTERPOLATION_MODE or "CFRAME",
-		}
-		table.insert(entities, data)
-	end
-	Stats.SERVER_ENTITIES = entities
 end
 
 const function UpdateHeartbeat()
@@ -321,14 +293,17 @@ const function Update()
 		entity._changes = nil
 	end
 	table.clear(Changes)
-	updateEntityStats()
+	UpdateEntityStats()
 	Ticker._IncrementGlobalTick()
 end
 
-const function HandleEntity(plr, entity: Types.Entity)
-	const add, clear = Bin()
+const function HandleEntity(plr: Player, entity: Types.Entity)
+	if entity.destroyed or entity.networkOwner ~= plr then
+		return
+	end
+	const addModel, clearModel = Bin()
 
-	const function HandleModel(entity: Types.Entity)
+	const function HandleModel()
 		if not entity.model then
 			return
 		end
@@ -352,31 +327,23 @@ const function HandleEntity(plr, entity: Types.Entity)
 			Entity.SetCFrame(entity, cframe)
 		end
 
-		add(partToUse:GetPropertyChangedSignal("CFrame"):Connect(CFrameChanged))
+		addModel(partToUse:GetPropertyChangedSignal("CFrame"):Connect(CFrameChanged))
 	end
-	const add2, clear2 = Bin()
-	add2(Entity.GetEvent(entity, "ModelChanged"):Connect(function()
-		clear()
-		HandleModel(entity)
-	end))
-	add2(Entity.GetEvent(entity, "LockChanged"):Connect(function()
-		clear()
-		HandleModel(entity)
-	end))
-	local destroyEvent
-	const event = Entity.GetEvent(entity, "NetworkOwnerChanged"):Once(function()
-		clear()
-		clear2()
-		destroyEvent:Disconnect()
-	end)
+	const function Rebind()
+		clearModel()
+		HandleModel()
+	end
+	const addEntity, clearEntity = Bin()
+	const function Cleanup()
+		clearModel()
+		clearEntity()
+	end
+	addEntity(Entity.GetEvent(entity, "ModelChanged"):Connect(Rebind))
+	addEntity(Entity.GetEvent(entity, "LockChanged"):Connect(Rebind))
+	addEntity(Entity.GetEvent(entity, "NetworkOwnerChanged"):Once(Cleanup))
+	addEntity(Entity.GetEvent(entity, "Destroying"):Once(Cleanup))
 
-	destroyEvent = Entity.GetEvent(entity, "Destroying"):Once(function()
-		clear()
-		clear2()
-		event:Disconnect()
-	end)
-
-	HandleModel(entity)
+	HandleModel()
 end
 
 const function HandleCFrameSetters()
@@ -413,4 +380,6 @@ Config._WaitForLock(function()
 	RunService.PostSimulation:Connect(Update)
 end)
 
-return nil
+return {
+	HasCFrameChanged = HasCFrameChanged,
+}

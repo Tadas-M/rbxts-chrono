@@ -18,6 +18,7 @@ local Snapshots = require(Shared.Snapshots)
 
 local Chrono = {
 	Start = Main.Start,
+	Started = Main.Started,
 	Entity = Entity,
 	Holder = Holder,
 	Events = Events,
@@ -32,6 +33,7 @@ if IS_SERVER then
 	Chrono.Receiver = require(Server.Receiver)
 	Chrono.ServerClock = require(Server.ServerClock)
 	Chrono.EntityGrid = require(Server.EntityGrid)
+	Chrono.Player = require(Server.Player)
 end
 
 return Chrono

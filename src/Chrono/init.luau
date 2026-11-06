@@ -43,10 +43,10 @@ const function CheckVersion()
 			if not success then
 				return
 			end
-			const data = HTTPS:JSONDecode(result)
+			const data = HTTPS:JSONDecode(result) :: { tag_name: string? }
 			const latestVersion = data.tag_name
 			const currentVersion = Config._GetConfig("__VERSION")
-			if latestVersion ~= currentVersion then
+			if latestVersion and latestVersion ~= currentVersion then
 				warn(
 					("Chrono: A new version is available! You are using version %s, but the latest version is %s."):format(
 						currentVersion,
@@ -79,6 +79,16 @@ return {
 		end
 		const currentVersion = Config._GetConfig("__VERSION")
 		print(`Chrono {currentVersion} Started.`)
+	end,
+
+	Started = function(callback: () -> ())
+		assert(
+			type(callback) == "function",
+			"Chrono.Started expects a function. Do you mean to call Chrono.Start() instead?"
+		)
+		Config._WaitForLock(function()
+			task.spawn(callback)
+		end)
 	end,
 
 	Holder = Holder,

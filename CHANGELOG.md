@@ -1,5 +1,46 @@
 # Changelog
 
+## 2.3.0 (2026-11-06)
+
+Tracks Chrono v2.2.1 → v2.3.0.
+
+### Breaking Changes
+
+- **`ATTACH_MODEL_META_DATA` removed from `EntityConfigInput`** — Chrono no longer attaches model metadata.
+- **`ServerClock.Store` lost its `clientServerTimeNow` parameter.**
+- **`Config.SetConfig` and `Config.RegisterEntityType` validate their input** — Unknown config names and invalid values now error, and `Chrono.Start()` errors if `MIN_BUFFER` exceeds `MAX_BUFFER`.
+- **`Entity.SetMount` errors on a self-mount or a parent that isn't registered** — A destroyed parent counts. A self-mount used to warn, and an unregistered parent was accepted.
+
+### New Features
+
+- **`Chrono.Started(callback)`** — Runs a callback once Chrono has started.
+- **`EntityConfig.ticker`** and the new **`Ticker`** interface — Each entity type's shared server ticker, with a `Ticked` event for stepping your own simulation.
+- **`ServerClock.ToServerTime(entity, renderTime, maxRewind?)`** — Converts a client's render time to a server time for `Entity.GetAt`, for lag compensation.
+- **`Entity.GetClock(entity)`** and the new **`ClientClock`** interface.
+- **`Entity.GetMountRoot(entity)`** — Top of the mount chain and the entity's offset from it.
+- **`Entity.GetEntityType(entity)`** — Name of the entity's type.
+- **`Entity.SetInterpolationMode(entity, undefined)`** — Returns to the type's mode.
+- **`HALF_TICK_MARGIN`** and **`INTERPOLATION_FUNCTION`** in `EntityConfigInput`, with a new `InterpolationFunction` type. `BUFFER` is now optional, matching the runtime.
+- **`EntityGrid.IsReplicated(player, entity)`**, **`Stats.SetForced(value)`**, **`Config.FLAGS.CHARACTER_WAIT_DELAY`**, **`Snapshot.PushWithCheck`**, **`ChronoSignal.HasListeners`** and **`Entity.lastClientClock`**.
+
+### Package
+
+- **`Chrono.Player`** (server only) — `RegisterPlayer` and `UnregisterPlayer`, previously not exposed by this package, for `PLAYER_REPLICATION = "CUSTOM"`.
+- **`Holder.GetEntityFromModel`** also accepts a `BasePart`, matching the runtime.
+
+### Behavioral Changes (upstream, no type impact)
+
+- Automatic character registration waits for `CharacterAppearanceLoaded`, up to 3 seconds (was a fixed 0.1 seconds). Disable with `Config.FLAGS.CHARACTER_WAIT_DELAY`.
+- `ServerClock.ConvertTo` no longer subtracts one-way delay.
+- Stopped entities send a reliable stop snapshot, and movement resumes from rest.
+- The dynamic buffer accounts for the largest recent send gap, and a fixed `BUFFER` grows by one tick interval for half-rate entities.
+- Client-owned entities always tick at full rate for their owner.
+- Other clients ease an entity for 0.3 seconds after its owner changes.
+- `NetworkOwnerChanged` fires after `PlayerOwnedRemoved`/`PlayerOwnedAdded`.
+- `Entity.GetAt` falls back to `latestCFrame` when the snapshot buffer is empty.
+- Destroying an entity clears its children's mounts on the server.
+- `Stats.SERVER.GRID_STATS` only updates while a debugger is open or stats are forced.
+
 ## 2.2.0 (2026-10-03)
 
 Tracks Chrono v2.2.0. No breaking API changes.

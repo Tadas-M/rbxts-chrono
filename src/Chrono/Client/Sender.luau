@@ -6,6 +6,8 @@ const Holder = require(Shared.Holder)
 const Types = require(Shared.Types)
 const Entity = require(Shared.Entity)
 const ClockUnwrap = require(Shared.ClockUnwrap)
+const Ticker = require(Shared.Ticker)
+const ServerReplicate = require(script.Parent.Parent.Server.Replicate)
 const UnreliableEvent = Shared.Remotes.Replicate
 const SafeReplicateEvent = Shared.Remotes.SafeReplicate
 
@@ -26,9 +28,10 @@ const TAU = math.pi * 2
 
 local clock = 0
 local hasTeleport = false
+local hasStop = false
 
-const function MapRotation(u16: number): number
-	return math.round((u16 + math.pi) / (TAU / 65535))
+const function MapRotation(radians: number): number
+	return math.round((radians + math.pi) / (TAU / 65535))
 end
 
 const function FireEvent(entity: Types.Entity, eventName: string, ...: any)
@@ -86,7 +89,7 @@ const function Flush()
 	const copy = buffer.create(INDEX + 4)
 	buffer.writeu32(copy, 0, ClockUnwrap.quantize(clock))
 	buffer.copy(copy, 4, BUFFER, 0, INDEX)
-	if hasTeleport then
+	if hasTeleport or hasStop then
 		SafeReplicateEvent:FireServer(copy)
 	else
 		UnreliableEvent:FireServer(copy)
@@ -95,7 +98,14 @@ const function Flush()
 	INDEX = 0
 end
 
-const function WriteEntity(id: number, cf: CFrame, fullCFrame: boolean?, halfTicked: boolean?, teleport: boolean?)
+const function WriteEntity(
+	id: number,
+	cf: CFrame,
+	fullCFrame: boolean?,
+	halfTicked: boolean?,
+	teleport: boolean?,
+	stop: boolean?
+)
 	const length = if fullCFrame then FULL_BYTES else YAW_BYTES
 
 	if INDEX + length > MAX_BUFFER_SIZE then
@@ -114,6 +124,10 @@ const function WriteEntity(id: number, cf: CFrame, fullCFrame: boolean?, halfTic
 		packed += 4
 	end
 
+	if stop then
+		packed += 8
+	end
+
 	buffer.writeu8(BUFFER, INDEX, packed)
 	INDEX += 1
 
@@ -122,16 +136,6 @@ const function WriteEntity(id: number, cf: CFrame, fullCFrame: boolean?, halfTic
 	else
 		INDEX = SerializeYaw(BUFFER, cf, INDEX)
 	end
-end
-
-const function CFrameChanged(cframe1: CFrame?, cframe2: CFrame?): boolean
-	if cframe1 == cframe2 then
-		return false
-	end
-	if cframe1 == nil or cframe2 == nil then
-		return true
-	end
-	return cframe1:FuzzyEq(cframe2, 0.0001) == false
 end
 
 --//This is to catch an edge case where the primarypart hasn't been replicated
@@ -164,40 +168,62 @@ const function CheckEntity(entity: Types.Entity)
 	end
 
 	const now = clock
-	const lastTime = entity.lastReplicatedTime or 0
-	const difference = now - lastTime
-
-	if difference < tickRate then
+	const nextSend = entity._nextSend or 0
+	if not Ticker._ShouldTick(nextSend, now, tickRate) then
 		return
 	end
+
+	entity._nextSend = Ticker._GetNextTick(nextSend, now, tickRate)
+	const lastTime = entity.lastReplicatedTime or 0
+	const difference = now - lastTime
+	const tickDt = now - (entity._lastCheck or lastTime)
+	entity._lastCheck = now
 	CheckLocker(entity)
-	FireEvent(entity, "Ticked", difference)
+	FireEvent(entity, "Ticked", tickDt)
 	const primaryPart = Entity.GetPrimaryPart(entity)
 
 	if entity.autoUpdatePosition and primaryPart then
-		Entity.Push(entity, now, primaryPart.CFrame)
+		Entity._Push(entity, now, primaryPart.CFrame)
 	end
 
 	const currentCFrame = entity.latestCFrame
 	const lastCFrame = entity.lastCheckedCFrame
-	if currentCFrame and CFrameChanged(lastCFrame, currentCFrame) then
+	if currentCFrame and ServerReplicate.HasCFrameChanged(lastCFrame, currentCFrame) then
 		entity.lastReplicatedTime = now
 		const fullCFrame = config.FULL_ROTATION
 		entity.lastCheckedCFrame = currentCFrame
-		hasTeleport = hasTeleport or entity._teleport
-		WriteEntity(entity.id, currentCFrame, fullCFrame, entity.isHalfTicked, entity._teleport)
+		const teleport = entity._teleport ~= nil
+		hasTeleport = hasTeleport or teleport
+		WriteEntity(entity.id, currentCFrame, fullCFrame, entity.isHalfTicked, teleport)
 		entity._teleport = nil
+		const step = if lastCFrame then currentCFrame.Position - lastCFrame.Position else Vector3.zero
+		const paused = (entity._idleTicks or 0) > 0
+		Entity._RecordMove(entity, step, if paused then math.max(math.round(difference / tickRate), 2) else 1)
+	elseif currentCFrame then
+		const idleTicks = Ticker._GetElapsedTicks(difference, tickRate)
+		const stopAfter = entity._stopAfter or 1
+		if idleTicks >= stopAfter and (entity._idleTicks or 0) < stopAfter then
+			hasStop = true
+			WriteEntity(entity.id, currentCFrame, config.FULL_ROTATION, entity.isHalfTicked, false, true)
+		end
+		entity._idleTicks = idleTicks
 	end
 end
 
 const function Update()
 	clock = os.clock()
 	for entity in PlayerEntities do
+		if entity.destroyed then
+			PlayerEntities[entity] = nil
+			continue
+		end
+
 		CheckEntity(entity)
 	end
 
 	Flush()
 	hasTeleport = false
+	hasStop = false
 end
 
 return {

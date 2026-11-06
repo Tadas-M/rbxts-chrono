@@ -1,15 +1,21 @@
+--!native
 const RunService = game:GetService("RunService")
 const Players = game:GetService("Players")
 const Receiver = {}
 
-const MiddleMans = {}
-local SortedMiddleMans = {}
 const Shared = script.Parent.Parent.Shared
+const Types = require(Shared.Types)
+
+type MiddleMan = {
+	priority: number,
+	func: (player: Player, entity: Types.Entity, cframe: CFrame, arriveTime: number) -> boolean,
+}
+const MiddleMans: { [string]: MiddleMan } = {}
+local SortedMiddleMans: { MiddleMan } = {}
 const Ticker = require(Shared.Ticker)
 const InterpolationMath = require(Shared.InterpolationMath)
 const Warn = require(Shared.Warn)
 const ServerClock = require(script.Parent.ServerClock)
-const Types = require(Shared.Types)
 const Holder = require(Shared.Holder)
 const Entity = require(Shared.Entity)
 const Config = require(Shared.Config)
@@ -37,9 +43,10 @@ const function FireMiddleMans(player: Player, entity: Types.Entity, cframe: CFra
 		return false
 	end
 	debug.profilebegin("FireMiddleMans")
-	for _, mmData: any in SortedMiddleMans do
+	for _, mmData in SortedMiddleMans do
 		const block = mmData.func(player, entity, cframe, arriveTime)
 		if block then
+			debug.profileend()
 			return true
 		end
 	end
@@ -77,13 +84,14 @@ const function DeserializeYaw(b: buffer, index: number): CFrame
 	return CFrame.new(x, y, z) * CFrame.fromOrientation(0, ry, 0)
 end
 
-const function DeserializeEntityPacket(b: buffer, index: number): (number, CFrame, number, boolean)
+const function DeserializeEntityPacket(b: buffer, index: number): (number, CFrame, number, boolean, boolean)
 	const id = buffer.readu16(b, index)
 	index += 2
 	const packed = buffer.readu8(b, index)
 	index += 1
 	const isFull = bit32.band(packed, 1) == 1
 	const isTeleport = bit32.band(packed, 4) == 4
+	const isStop = bit32.band(packed, 8) == 8
 
 	local cframe: CFrame
 	if isFull then
@@ -94,12 +102,12 @@ const function DeserializeEntityPacket(b: buffer, index: number): (number, CFram
 		index += YAW_BYTES
 	end
 
-	return id, cframe, index, isTeleport
+	return id, cframe, index, isTeleport, isStop
 end
 
 const function CalculateMaxThroughputForPlayer(player: Player): number
 	local numberOfEntities = 0
-	for _ in Holder._clientOwned[player] or {} do
+	for _ in (Holder._clientOwned[player] or {}) :: any do
 		numberOfEntities += 1
 	end
 	return BASE_MAX_TOTAL_BYTES_PER_FRAME_PER_PLAYER + numberOfEntities * (FULL_BYTES + 3)
@@ -112,10 +120,17 @@ const function HandleEntity(
 	clientClock: number,
 	cframe: CFrame,
 	copyB: buffer,
-	isTeleport: boolean
+	isTeleport: boolean,
+	isStop: boolean
 )
 	const entity = Holder.GetEntityFromId(id)
 	if not entity or entity.networkOwner ~= player then
+		return
+	end
+
+	const position = cframe.Position
+	const sum = position.X + position.Y + position.Z
+	if sum ~= sum or math.abs(sum) == math.huge then -- NaN or inf
 		return
 	end
 
@@ -138,6 +153,12 @@ const function HandleEntity(
 		return
 	end
 
+	if isStop and entity.snapshot and entity.snapshot.stoppedAt then
+		isStop = false
+		const packed = buffer.readu8(copyB, 2)
+		buffer.writeu8(copyB, 2, bit32.band(packed, bit32.bnot(8)))
+	end
+
 	debug.profilebegin("HandleEntity.FireMiddleMans")
 	if FireMiddleMans(player, entity, cframe, serverClock) then
 		debug.profileend()
@@ -145,13 +166,11 @@ const function HandleEntity(
 	end
 	debug.profileend()
 	local velocity = nil
-	if Config.FLAGS.SERVER_VELOCITY_FIX and entity.snapshot then
+	if Config.FLAGS.SERVER_VELOCITY_FIX and entity.snapshot and entity.lastClientClock then
 		const latest = entity.snapshot:GetLatest()
-		const lastClientClock = entity.lastClientClock or clientClock
-		local tickrate = entity.entityConfig.TICK_RATE
-		if entity.isHalfTicked then
-			tickrate = tickrate * 2
-		end
+		const lastClientClock = entity.lastClientClock
+		const baseTickRate = entity.entityConfig.TICK_RATE
+		const tickrate = if entity.isHalfTicked then baseTickRate * 2 else baseTickRate
 		if latest then
 			velocity = InterpolationMath.CalculateVelocity(
 				latest.value.Position,
@@ -162,11 +181,23 @@ const function HandleEntity(
 			)
 		end
 	end
-	if Entity.Push(entity, serverClock, cframe, velocity) then
-		entity.arriveFrame = Ticker.GetGlobalTick()
+	const pushed = if isStop
+		then Entity._PushStopped(entity, serverClock, cframe)
+		else Entity._Push(entity, serverClock, cframe, velocity)
+	if pushed then
+		const frame = Ticker.GetGlobalTick()
+		const previous = entity.cframeBuffer
+		if entity.arriveFrame == frame and entity.lastClientClock ~= nil and previous then
+			const teleportFlag = bit32.band(buffer.readu8(previous, 2), 4) -- keep teleport flag
+			buffer.writeu8(copyB, 2, bit32.bor(buffer.readu8(copyB, 2), teleportFlag))
+		end
+		entity.arriveFrame = frame
 
 		entity.lastClientClock = clientClock
 		entity.cframeBuffer = copyB
+		entity._halfBuffer = nil
+
+		-- If we update the model on native this will cause the client to also update the model
 		if entity.modelReplicationMode == "NATIVE" and not entity._lockedCFReplication then
 			return
 		end
@@ -176,7 +207,7 @@ end
 
 const TotalBytes = {}
 const function OnReceive(player: Player, data: buffer)
-	if not data then
+	if typeof(data) ~= "buffer" or player.Parent == nil then
 		return
 	end
 	TotalBytes[player] = (TotalBytes[player] or 0) + buffer.len(data)
@@ -196,13 +227,23 @@ const function OnReceive(player: Player, data: buffer)
 	ServerClock.Store(player, clientClock)
 
 	while index < dataLength do
-		const id, cframe, newIndex, isTeleport = DeserializeEntityPacket(data, index)
+		const id, cframe, newIndex, isTeleport, isStop = DeserializeEntityPacket(data, index)
 		const copy = buffer.create(newIndex - index)
 		buffer.copy(copy, 0, data, index, newIndex - index)
 		index = newIndex
-		HandleEntity(player, id, serverClock, clientClock, cframe, copy, isTeleport)
+		HandleEntity(player, id, serverClock, clientClock, cframe, copy, isTeleport, isStop)
 	end
 	debug.profileend()
+end
+
+const function SortMiddleMans()
+	SortedMiddleMans = {}
+	for _, data in MiddleMans do
+		table.insert(SortedMiddleMans, data)
+	end
+	table.sort(SortedMiddleMans, function(a: MiddleMan, b: MiddleMan)
+		return a.priority > b.priority
+	end)
 end
 
 --[=[
@@ -223,13 +264,7 @@ function Receiver.RegisterMiddleMan(
 	) -> boolean
 )
 	MiddleMans[name] = { priority = priority, func = func }
-	SortedMiddleMans = {}
-	for mm, data in MiddleMans do
-		table.insert(SortedMiddleMans, data)
-	end
-	table.sort(SortedMiddleMans, function(a, b)
-		return a.priority > b.priority
-	end)
+	SortMiddleMans()
 end
 
 --[=[
@@ -238,18 +273,12 @@ end
 ]=]
 function Receiver.UnregisterMiddleMan(name: string)
 	MiddleMans[name] = nil
-	SortedMiddleMans = {}
-	for mm, data in MiddleMans do
-		table.insert(SortedMiddleMans, data)
-	end
-	table.sort(SortedMiddleMans, function(a, b)
-		return a.priority > b.priority
-	end)
+	SortMiddleMans()
 end
 
 if RunService:IsServer() then
 	local lastByteCheckTime = 0
-	RunService.Heartbeat:Connect(function(a0: number)
+	RunService.Heartbeat:Connect(function()
 		table.clear(TotalBytes)
 
 		if os.clock() - lastByteCheckTime > 1 then
@@ -262,10 +291,13 @@ if RunService:IsServer() then
 	SafeReplicateEvent.OnServerEvent:Connect(OnReceive)
 
 	Shared.Remotes.ClientHeartbeat.OnServerEvent:Connect(function(player: Player, seconds: number)
-		if type(seconds) ~= "number" then
+		if type(seconds) ~= "number" or player.Parent == nil then
 			return
 		end
 		const clientClock = ClockUnwrap.seatFullFor(ClientClockWrap, player, seconds)
+		if clientClock == nil then
+			return
+		end
 		ServerClock.Store(player, clientClock)
 	end)
 

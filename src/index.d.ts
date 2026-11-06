@@ -1,5 +1,5 @@
 /**
- * TypeScript definitions for Chrono v2.2.0
+ * TypeScript definitions for Chrono v2.3.0
  * Custom Character Replication for Roblox
  * @see https://github.com/Parihsz/Chrono
  */
@@ -15,6 +15,15 @@ declare namespace Chrono {
 	 * - `NONE`: doesn't apply the transform; snapshots still arrive for `Entity.GetAt`.
 	 */
 	export type InterpolationMode = "CFRAME" | "ALIGN" | "NONE";
+	/** Blends two snapshots. `t` is progress from 0 to 1; `dt` is the seconds between them. */
+	export type InterpolationFunction = (
+		from: CFrame,
+		to: CFrame,
+		v0: Vector3,
+		v1: Vector3,
+		t: number,
+		dt: number,
+	) => CFrame;
 	export type PlayerReplicationMode = "AUTOMATIC" | "CUSTOM";
 	export type ReplicationFilterMode = "NONE" | "PLAYER_ENTITIES" | "PLAYER_CHARACTERS";
 	export type WarningLevel = "NONE" | "LOW" | "MEDIUM" | "HIGH";
@@ -82,6 +91,7 @@ declare namespace Chrono {
 	export interface ChronoSignal<T extends Callback = Callback> {
 		Fire(...args: Parameters<T>): void;
 		DisconnectAll(): void;
+		HasListeners(): boolean;
 		Event: ChronoEvent<T>;
 	}
 
@@ -93,6 +103,17 @@ declare namespace Chrono {
 
 	export interface Snapshot<Value, Velocity> {
 		Push(timeStamp: number, value: Value, velocity: Velocity): void;
+		/**
+		 * `Push` with the idle and stop handling used for replicated entities. `Value` must have a
+		 * `Position`, such as a CFrame. Omitted velocity is estimated.
+		 */
+		PushWithCheck(
+			timeStamp: number,
+			value: Value,
+			velocity: Velocity | undefined,
+			tickRate: number,
+			stopped?: boolean,
+		): void;
 		GetLatest(): SnapshotData<Value, Velocity> | undefined;
 		/** Gets the interpolated value at a time. A negative `at` returns the latest value. */
 		GetAt(at: number, bypassLock?: boolean): Value | undefined;
@@ -101,11 +122,11 @@ declare namespace Chrono {
 
 	export interface EntityConfigInput {
 		/**
-		 * Interpolation buffer time in seconds. If set to 0, server-owned
+		 * Interpolation buffer time in seconds. If 0 or omitted, server-owned
 		 * entities of this type use a dynamic (adaptive) buffer instead.
 		 * Client-owned entities always use a dynamic buffer.
 		 */
-		BUFFER: number;
+		BUFFER?: number;
 		TICK_RATE: number;
 		FULL_ROTATION?: boolean;
 		AUTO_UPDATE_POSITION?: boolean;
@@ -115,6 +136,8 @@ declare namespace Chrono {
 		ASSEMBLY_ROOT_PART_CHECK?: boolean;
 		NORMAL_TICK_DISTANCE?: number;
 		HALF_TICK_DISTANCE?: number;
+		/** Studs past `HALF_TICK_DISTANCE` an entity stays sent to a player who already has it. */
+		HALF_TICK_MARGIN?: number;
 		/**
 		 * Disables Chrono's interpolation for every entity of this type; cannot change at runtime.
 		 * Prefer `Entity.SetInterpolationMode(entity, "NONE")`.
@@ -122,14 +145,17 @@ declare namespace Chrono {
 		CUSTOM_INTERPOLATION?: boolean;
 		/** Overrides `DEFAULT_INTERPOLATION_MODE` for this entity type. */
 		INTERPOLATION_MODE?: InterpolationMode;
-		/** If explicitly false, Chrono will not attach model metadata. Defaults to true. */
-		ATTACH_MODEL_META_DATA?: boolean;
+		/** Replaces the default Hermite position + `CFrame.Lerp` rotation blend. Must match on server and client. */
+		INTERPOLATION_FUNCTION?: InterpolationFunction;
 	}
 
 	/** A locked (registered) entity type configuration, as returned by `Config.GetEntityType`. */
 	export interface EntityConfig extends EntityConfigInput {
 		/** The name this entity type was registered under */
 		readonly NAME: string;
+
+		/** The type's shared ticker. Server only, available after `Chrono.Start()`. */
+		readonly ticker: Ticker | undefined;
 
 		/**
 		 * Updates the interpolation buffer for every entity of this type (client),
@@ -138,6 +164,45 @@ declare namespace Chrono {
 		 * Pass 0 for a dynamic buffer. Errors if called before `Chrono.Start()`.
 		 */
 		UpdateBuffer(buffer: number): void;
+	}
+
+	/** Read-only: changing these fields may break Chrono. */
+	export interface Ticker {
+		/** The entity type this ticker belongs to */
+		readonly config: EntityConfig;
+
+		/** Configured interval between ticks, in seconds */
+		readonly tickRate: number;
+
+		/** `os.clock()` time of the latest tick. Use it as the timestamp for `Entity.Push`. */
+		readonly lastTicked: number;
+
+		/** Elapsed seconds for the current or most recent tick */
+		readonly dt: number;
+
+		/** Whether the current tick also updates half-rate entities */
+		readonly isHalf: boolean;
+
+		/** Entities currently being ticked; excludes entities out of everyone's range */
+		readonly objects: readonly Entity[];
+
+		/** Fires at the type's `TICK_RATE`, before Chrono processes the type's entities */
+		readonly Ticked: ChronoEvent<(ticker: Ticker, dt: number) => void>;
+	}
+
+	export interface ClientClock {
+		/** The render time on the server's clock, or the owner's clock for client-owned entities. */
+		GetTargetRenderTime(): number;
+
+		/** Returns 0 until the first timestamp arrives. */
+		GetEstimatedServerTime(): number;
+	}
+
+	export interface RegisterPlayerOptions {
+		/** Entity type name. Defaults to `"PLAYER"`. */
+		config?: string;
+		/** Overrides the entity type's `MODEL_REPLICATION_MODE`. */
+		modelRepMode?: ModelReplicationMode;
 	}
 
 	export interface ClientStats {
@@ -164,7 +229,7 @@ declare namespace Chrono {
 		BYTES_RECEIVED_PER_SEC: number;
 		BYTES_SENT_PER_SEC: number;
 		PACKETS_SENT_PER_SEC: number;
-		/** Per-player (by name) entity ids currently replicated at each tick rate */
+		/** Per-player (by name) entity ids at each tick rate. Only updates while a debugger is open or forced. */
 		GRID_STATS: Map<string, { HALF: number[]; NORMAL: number[] }>;
 	}
 
@@ -201,6 +266,9 @@ declare namespace Chrono {
 
 		/** The timestamp of the most recent update */
 		readonly latestTime: number | undefined;
+
+		/** On the server, for client-owned entities: the owner's clock time of the newest packet */
+		readonly lastClientClock: number | undefined;
 
 		/** Whether position updates automatically */
 		readonly autoUpdatePosition: boolean;
@@ -243,6 +311,9 @@ declare namespace Chrono {
 		/** Sets the entity configuration type */
 		SetConfig: (entity: Entity, entityConfig: string) => void;
 
+		/** Gets the name of the entity's type, e.g. `"PLAYER"` */
+		GetEntityType: (entity: Entity) => string;
+
 		/**
 		 * Sets a per-entity interpolation buffer, creating a dedicated client
 		 * clock for this entity. Overrides the entity config's `BUFFER` and is
@@ -252,6 +323,9 @@ declare namespace Chrono {
 		 * on the server.)
 		 */
 		SetClockBuffer: (entity: Entity, buffer?: number) => void;
+
+		/** Gets the entity's client clock. Undefined on the server. */
+		GetClock: (entity: Entity) => ClientClock | undefined;
 
 		/** Sets the broad phase collision bounds */
 		SetBroadPhase: (entity: Entity, broadPhase?: Vector3) => void;
@@ -270,6 +344,9 @@ declare namespace Chrono {
 
 		/** Mounts an entity to a parent entity with optional offset */
 		SetMount: (entity: Entity, parent?: Entity, offset?: CFrame) => void;
+
+		/** Gets the top of the mount chain and this entity's offset from it. Unmounted entities return themselves. */
+		GetMountRoot: (entity: Entity) => LuaTuple<[Entity, CFrame]>;
 
 		/** Sets the network owner (player who controls this entity) */
 		SetNetworkOwner: (entity: Entity, player?: Player) => void;
@@ -292,10 +369,10 @@ declare namespace Chrono {
 		/** Pushes a new CFrame snapshot at the given time */
 		Push: (entity: Entity, time: number, value: CFrame, velocity?: Vector3) => boolean;
 
-		/** Gets the interpolated CFrame at a specific time */
+		/** Gets the interpolated CFrame at a specific time, falling back to `latestCFrame` without history */
 		GetAt: (entity: Entity, time: number) => CFrame | undefined;
 
-		/** Gets the target render time for interpolation. Returns -1 when no render cache is configured. */
+		/** Gets the target render time for interpolation. Returns -1 without a client clock, as on the server. */
 		GetTargetRenderTime: (entity: Entity) => number;
 
 		/** Sets whether position updates automatically */
@@ -324,8 +401,9 @@ declare namespace Chrono {
 		/**
 		 * Sets how clients apply interpolated transforms to this entity, overriding the
 		 * entity type's `INTERPOLATION_MODE`. Called on the server, it replicates to all clients.
+		 * Pass undefined to go back to the type's mode.
 		 */
-		SetInterpolationMode: (entity: Entity, mode: InterpolationMode) => void;
+		SetInterpolationMode: (entity: Entity, mode?: InterpolationMode) => void;
 
 		/** Gets the current model replication type */
 		GetModelReplicationType: (entity: Entity) => "NATIVE" | "CUSTOM" | "NATIVE_WITH_LOCK";
@@ -393,6 +471,9 @@ declare namespace Chrono {
 	 */
 	function Start(config?: ModuleScript): void;
 
+	/** Runs `callback` once Chrono has started, immediately if it already has. */
+	function Started(callback: () => void): void;
+
 	/** Entity constructor */
 	const Entity: EntityConstructor;
 
@@ -420,7 +501,7 @@ declare namespace Chrono {
 		function GetEntityFromId(id: number): Entity | undefined;
 
 		/** Gets the entity associated with a model */
-		function GetEntityFromModel(model: Model): Entity | undefined;
+		function GetEntityFromModel(model: Model | BasePart): Entity | undefined;
 
 		/** Map of entity IDs to entities (Lua table, use .get() to access) */
 		const idMap: ReadonlyMap<number, Entity>;
@@ -452,10 +533,10 @@ declare namespace Chrono {
 
 	/** Configuration functions */
 	namespace Config {
-		/** Sets a configuration value (must be called before Start) */
+		/** Sets a configuration value (must be called before Start). Errors on invalid values. */
 		function SetConfig<K extends ConfigName>(name: K, value: ConfigValueMap[K]): void;
 
-		/** Registers a custom entity type configuration */
+		/** Registers a custom entity type configuration (must be called before Start). Errors on invalid values. */
 		function RegisterEntityType(name: string, config: EntityConfigInput): void;
 
 		/**
@@ -485,6 +566,8 @@ declare namespace Chrono {
 		 * revert to pre-fix behavior, e.g. `Config.FLAGS.FIX_TELEPORT_JITTER = false`.
 		 */
 		const FLAGS: {
+			/** Waits for CharacterAppearanceLoaded (up to 3 seconds) before registering a character */
+			CHARACTER_WAIT_DELAY: boolean;
 			/** Fixes velocity calculation on the server when two packets are received next to each other */
 			SERVER_VELOCITY_FIX: boolean;
 			/** Fixes velocity calculation when dt is less than the tick rate */
@@ -538,6 +621,9 @@ declare namespace Chrono {
 
 		/** Revokes a player's permission to receive server stats (Server only) */
 		function StopReplicatingStatsForPlayer(userId: number | Player): void;
+
+		/** Collects per-entity and grid stats without an open debugger. */
+		function SetForced(value: boolean): void;
 	}
 
 	/** Server-side receiver middleware (Server only) */
@@ -552,10 +638,16 @@ declare namespace Chrono {
 	/** Server clock utilities (Server only) */
 	namespace ServerClock {
 		/** Stores clock synchronization data for a player */
-		function Store(player: Player, clientClockTime: number, clientServerTimeNow?: number): void;
+		function Store(player: Player, clientClockTime: number): void;
 
 		/** Converts a clock value between server and client time */
 		function ConvertTo(player: Player, clock: number, environment: "Server" | "Client"): number;
+
+		/**
+		 * Converts a client's `Entity.GetTargetRenderTime` value to a server time for `Entity.GetAt`,
+		 * clamped to the last `maxRewind` seconds (default 1). Undefined for a missing entity or invalid time.
+		 */
+		function ToServerTime(entity: Entity | undefined, renderTime: number, maxRewind?: number): number | undefined;
 
 		/** Removes clock data for a player */
 		function Remove(player: Player): void;
@@ -566,8 +658,20 @@ declare namespace Chrono {
 		/** Gets the PlayerEntityHolder for a player, or undefined if the player has not loaded yet */
 		function GetEntityHolder(player: Player): PlayerEntityHolder | undefined;
 
+		/** Whether the entity is currently sent to the player */
+		function IsReplicated(player: Player, entity: Entity): boolean;
+
 		/** Updates the position used for proximity-based replication culling for the given player */
 		function UpdatePlayerPosition(player: Player, position: Vector3): void;
+	}
+
+	/** Registers player characters when `PLAYER_REPLICATION` is `"CUSTOM"` (Server only) */
+	namespace Player {
+		/** Replaces the player's character entity, handling R6 primary parts and ownership. */
+		function RegisterPlayer(player: Player, character: Model, options: RegisterPlayerOptions): Entity;
+
+		/** Destroys the player's character entity */
+		function UnregisterPlayer(player: Player): void;
 	}
 
 	/** Snapshot utilities */

@@ -6,62 +6,9 @@ const RunService = game:GetService("RunService")
 const Events = require(script.Parent.Parent.Shared.Events)
 const Config = require(script.Parent.Parent.Shared.Config)
 const ReplicationRules = require(script.Parent.Parent.Shared.ReplicationRules)
+const RuleAllows = ReplicationRules.Allows
 const Stats = require(script.Parent.Parent.Shared.Stats)
---[[
-	We just need to track entities with players near them
-
-	Track how far an entity is from a player
-	Fast query to get entities near a player
-	Far away entities could be checked less frequently
-
-	Ideas:
-	   1. give each player their own hashgird that stores other npcs
-	      - expensive so no
-	   2. idk-
-
-	cause when we do like um
-	for i,entity in queryEntitiesNear(location,100) -- this range is constant
-
-	but for far away entities we have to query again
-
-	maybe have two grids, one for close and one for far?
-	actually maybe just do
-   player:{
-		closeEntities = {},
-		farEntities = {},
-   }
-	changed to
-	player:{
-		normalEntities = {},
-		halfTick = {},
-		lowTick = {},
-   }
-]]
-for id, entity in { "ALL_ENTITIES" } do
-	--[[
-	--we could now give entities a proxy of how far they are for removal
-	--we could do
-		EntityConfig: {
-			Normal: 100,
-			HalfTick: 200,
-			LowTick: 300,
-			--don't need a removal one since we can just not replicate it
-		}
-	--loop thru players and get range
-	--insert into the players close and far table
-
-
-	-- Changed it so the ticker system keeps track of it now
-	]]
-end
---[[
-	-- the old has grid had a system where it was
-	local UPDATE_INTERVAL = 2
-	so there really wasn't a point to query again until it updated
-	but ig we still need to check for when an npc was removed from proxy
-	could create another table to store removed entities
-
-]]
+const Warn = require(script.Parent.Parent.Shared.Warn)
 
 const Shared = script.Parent.Parent.Shared
 const Types = require(Shared.Types)
@@ -78,6 +25,11 @@ local UPDATE_INTERVAL = 0.1
 local MAX_TIME_PER_UPDATE = 0.0005
 
 local lastUpdate = 0
+
+Config._WaitForLock(function()
+	UPDATE_INTERVAL = Config._GetConfig("GRID_UPDATE_INTERVAL") or UPDATE_INTERVAL
+	MAX_TIME_PER_UPDATE = Config._GetConfig("GRID_MAX_UPDATE_TIME") or MAX_TIME_PER_UPDATE
+end)
 
 local FULL_TICKED = 0
 local HALF_TICKED = 0
@@ -96,7 +48,7 @@ const function Check(entity: Entity)
 		return
 	end
 	if entity.id < 1 then
-		warn(entity, " has invalid id, cannot check for proximity")
+		Warn.high(entity, " has invalid id, cannot check for proximity")
 		return
 	end
 	const position: vector = cframe.Position :: any
@@ -105,6 +57,8 @@ const function Check(entity: Entity)
 	local hasHalfTickers = false
 	const halfTickDistance = entityConfig.HALF_TICK_DISTANCE or math.huge
 	const normalTickDistance = entityConfig.NORMAL_TICK_DISTANCE or math.huge
+
+	const keepDistance = halfTickDistance + (entityConfig.HALF_TICK_MARGIN or 0)
 	const networkOwner = entity.networkOwner
 	const ownedHolder = networkOwner and playerToHolder[networkOwner]
 
@@ -112,18 +66,26 @@ const function Check(entity: Entity)
 	const isNotNative = isLocked or entity.modelReplicationMode ~= "NATIVE"
 	for holder, playerPos in playerTablePositionPair do
 		const viewer = holder.PLAYER
-		const allowed = ReplicationRules.Allows(entity, viewer)
+		const allowed = RuleAllows(entity, viewer)
 		if not allowed then
+			continue
+		end
+
+		-- owners are always replicated
+		if holder == ownedHolder then
+			hasNormalTickers = true
+			table.insert(holder._TEMP_NORMAL, entity)
 			continue
 		end
 
 		const distance = vector.magnitude(position - playerPos)
 
+		-- if entity is native then we keep it half ticked else remove it
 		if distance > halfTickDistance and isNotNative then
-			if holder == ownedHolder then
-				table.insert(holder._TEMP_NORMAL, entity)
+			const kept = distance <= keepDistance and holder.REPLICATED[entity] ~= nil
+			if not kept then
+				continue
 			end
-			continue
 		end
 
 		if distance <= normalTickDistance then
@@ -135,22 +97,16 @@ const function Check(entity: Entity)
 		end
 	end
 
-	const configTicker = entityConfig.TICKER
+	const configTicker = entityConfig.ticker
 	if not configTicker then
 		return
 	end
 
 	const currentTicker = entity._ticker
 	if hasHalfTickers and not hasNormalTickers then
-		if entity.isHalfTicked == false then
-			--warn("Entity is now half ticked", entity.id)
-		end
 		SetTickMode(entity, true)
 		HALF_TICKED += 1
 	elseif hasNormalTickers then
-		if entity.isHalfTicked then
-			--warn("Entity is normal ticked", entity.id)
-		end
 		SetTickMode(entity, false)
 		FULL_TICKED += 1
 	else
@@ -158,10 +114,8 @@ const function Check(entity: Entity)
 	end
 	if (hasNormalTickers or hasHalfTickers) and entity._ticker ~= configTicker then
 		Ticker.move(entity, configTicker)
-		--warn("Adding entity to ticker", entity.id)
 	elseif not (hasNormalTickers or hasHalfTickers) and currentTicker then
 		SetTickMode(entity, nil)
-		--warn("Removing entity from ticker", entity.id,currentTicker)
 		Ticker.Remove(currentTicker, entity)
 	end
 end
@@ -181,7 +135,8 @@ const function DoLoop()
 	local count = 0
 	local start = os.clock()
 	local sections = 1
-	for _, entity in entities do
+	-- clone as the table could be mutated
+	for _, entity in table.clone(entities) do
 		debug.profilebegin(`Check One`)
 		Check(entity)
 		count += 1
@@ -206,27 +161,31 @@ const function DoLoop()
 	Stats.SERVER.ENTITIES_HALF_TICKED = HALF_TICKED
 	Stats.SERVER.NON_TICKED = UN_TICKED
 
-	local debugPlayers = {}
-
 	for _, holder in playerToHolder do
-		const tempNormal = holder._TEMP_NORMAL
-		const tempHalf = holder._TEMP_HALF
 		table.clear(holder.HALF)
 		table.clear(holder.NORMAL)
-		debugPlayers[holder.PLAYER.Name] = {
-			HALF = {},
-			NORMAL = {},
-		}
-		for _, entity in tempNormal do
-			table.insert(debugPlayers[holder.PLAYER.Name].NORMAL, entity.id)
+		for _, entity in holder._TEMP_NORMAL do
 			table.insert(holder.NORMAL, entity)
 		end
-		for _, entity in tempHalf do
-			table.insert(debugPlayers[holder.PLAYER.Name].HALF, entity.id)
+		for _, entity in holder._TEMP_HALF do
 			table.insert(holder.HALF, entity)
 		end
 	end
-	Stats.SERVER.GRID_STATS = debugPlayers
+
+	if Stats.SERVER._SHOULD_REPLICATE then
+		const gridStats = {}
+		for _, holder in playerToHolder do
+			const entry = { HALF = {}, NORMAL = {} }
+			for _, entity in holder.NORMAL do
+				table.insert(entry.NORMAL, entity.id)
+			end
+			for _, entity in holder.HALF do
+				table.insert(entry.HALF, entity.id)
+			end
+			gridStats[holder.PLAYER.Name] = entry
+		end
+		Stats.SERVER.GRID_STATS = gridStats
+	end
 end
 
 -- this might be able to be optimized more later
@@ -238,9 +197,6 @@ const function Update()
 	if os.clock() - lastUpdate < UPDATE_INTERVAL then
 		return
 	end
-	UPDATE_INTERVAL = Config._GetConfig("GRID_UPDATE_INTERVAL") or UPDATE_INTERVAL
-	MAX_TIME_PER_UPDATE = Config._GetConfig("GRID_MAX_UPDATE_TIME") or MAX_TIME_PER_UPDATE
-
 	lastUpdate = os.clock()
 	task.spawn(DoLoop)
 end
@@ -257,11 +213,16 @@ const function GetEntityHolder(Player: Player): PlayerEntityHolder?
 	return playerToHolder[Player]
 end
 
+const function IsReplicated(player: Player, entity: Entity): boolean
+	const holder = playerToHolder[player]
+	return holder ~= nil and holder.REPLICATED[entity] == true
+end
+
 const function PlayerAdded(player: Player)
 	if playerToHolder[player] then
 		return
 	end
-	const t = {
+	const t: PlayerEntityHolder = {
 		PLAYER = player,
 		HALF = {},
 		NORMAL = {},
@@ -290,10 +251,10 @@ if RunService:IsServer() then
 		playerToHolder[player] = nil
 	end)
 end
--- Players.PlayerAdded:Connect(PlayerAdded)
 
 return {
 	Update = Update,
 	UpdatePlayerPosition = UpdatePlayerPosition,
 	GetEntityHolder = GetEntityHolder,
+	IsReplicated = IsReplicated,
 }

@@ -41,7 +41,7 @@ export type SetConfig =
 	& ("GRID_MAX_UPDATE_TIME", number) -> ()
 local LOCKED = false
 const BASE_CONFIG = {
-	__VERSION = "v2.2.0",
+	__VERSION = "v2.3.0",
 	CHECK_NEW_VERSION = true,
 	MAX_TOTAL_BYTES_PER_FRAME_PER_PLAYER = 300, -- Base line value
 	MIN_BUFFER = 0.09,
@@ -52,7 +52,7 @@ const BASE_CONFIG = {
 
 	WARNING_SEVERITY = "MEDIUM", -- "NONE", "LOW", "MEDIUM", "HIGH"
 	DEFAULT_NORMAL_TICK_DISTANCE = 50,
-	DEFAULT_HALF_TICK_DISTANCE = 100, -- Anything beyond this distance will not be replicated
+	DEFAULT_HALF_TICK_DISTANCE = 100, -- Anything beyond this distance will not be replicated for non-owned entities.
 
 	REPLICATE_DEATHS = "PLAYER_CHARACTERS",
 	--[[
@@ -89,7 +89,7 @@ const BASE_CONFIG = {
 		-ALIGN = Drive an AlignPosition/AlignOrientation toward the target instead.
 			+ Physics keeps resolving joints and collisions while still tracking the target.
 			- More expensive, and has unknown interactions with other constraints.
-		-NONE = Do not apply the transform at all. 
+		-NONE = Do not apply the transform at all.
 	]]
 	DEFAULT_MODEL_REPLICATION_MODE = "NATIVE",
 	--[[
@@ -116,7 +116,7 @@ const ENTITY_TYPES: { [string]: Types.EntityConfig } = {
 		NAME = "WITH_ROT",
 		MODEL_REPLICATION_MODE = "NATIVE",
 		BUFFER = 0,
-		HALF_TICK_DISTANCE = math.huge, 
+		HALF_TICK_DISTANCE = math.huge,
 		TICK_RATE = 1 / 20,
 		ASSEMBLY_ROOT_PART_CHECK = true,
 		FULL_ROTATION = true,
@@ -133,6 +133,66 @@ const ENTITY_TYPES: { [string]: Types.EntityConfig } = {
 const ENTITY_MODELS = {}
 const MODEL_BROAD_PHASES = {}
 
+const MODEL_MODES = { "NATIVE", "NATIVE_WITH_LOCK", "CUSTOM" }
+const INTERPOLATION_MODES = { "CFRAME", "ALIGN", "NONE" }
+const PLAYER_FILTERS = { "NONE", "PLAYER_ENTITIES", "PLAYER_CHARACTERS" }
+const CONFIG_OPTIONS = {
+	DEFAULT_MODEL_REPLICATION_MODE = MODEL_MODES,
+	DEFAULT_INTERPOLATION_MODE = INTERPOLATION_MODES,
+	PLAYER_REPLICATION = { "AUTOMATIC", "CUSTOM" },
+	REPLICATE_DEATHS = PLAYER_FILTERS,
+	REPLICATE_CFRAME_SETTERS = PLAYER_FILTERS,
+	WARNING_SEVERITY = { "NONE", "LOW", "MEDIUM", "HIGH" },
+}
+
+const function CheckOption(name: string, value: any, options: { string })
+	assert(table.find(options, value), `Chrono: {name} must be {table.concat(options, ", ")}, got {tostring(value)}`)
+end
+
+const function CheckEntityType(name: string, config: Types.EntityConfigInput)
+	assert(type(name) == "string" and name ~= "", "Chrono: entity type name must be a non-empty string")
+	assert(type(config) == "table", `Chrono: entity type "{name}" must be a table`)
+	assert(
+		type(config.TICK_RATE) == "number" and config.TICK_RATE > 0 and config.TICK_RATE < math.huge,
+		`Chrono: entity type "{name}" needs a finite TICK_RATE greater than 0, such as 1 / 20`
+	)
+	if config.BUFFER ~= nil then
+		assert(
+			type(config.BUFFER) == "number" and math.abs(config.BUFFER) < math.huge,
+			`Chrono: entity type "{name}" BUFFER must be a finite number`
+		)
+	end
+	for _, field in { "NORMAL_TICK_DISTANCE", "HALF_TICK_DISTANCE", "HALF_TICK_MARGIN" } do
+		const value = (config :: any)[field]
+		assert(
+			value == nil or (type(value) == "number" and value >= 0),
+			`Chrono: entity type "{name}" {field} must be a non-negative number`
+		)
+	end
+	for _, field in
+		{
+			"FULL_ROTATION",
+			"AUTO_UPDATE_POSITION",
+			"STORE_SNAPSHOTS",
+			"ASSEMBLY_ROOT_PART_CHECK",
+			"CUSTOM_INTERPOLATION",
+		}
+	do
+		const value = (config :: any)[field]
+		assert(value == nil or type(value) == "boolean", `Chrono: entity type "{name}" {field} must be a boolean`)
+	end
+	if config.MODEL_REPLICATION_MODE ~= nil then
+		CheckOption(`entity type "{name}" MODEL_REPLICATION_MODE`, config.MODEL_REPLICATION_MODE, MODEL_MODES)
+	end
+	if config.INTERPOLATION_MODE ~= nil then
+		CheckOption(`entity type "{name}" INTERPOLATION_MODE`, config.INTERPOLATION_MODE, INTERPOLATION_MODES)
+	end
+	assert(
+		config.INTERPOLATION_FUNCTION == nil or type(config.INTERPOLATION_FUNCTION) == "function",
+		`Chrono: entity type "{name}" INTERPOLATION_FUNCTION must be a function`
+	)
+end
+
 --[=[
 	Registers an entity type configuration.
 	Can only be called before the config is locked.
@@ -141,7 +201,10 @@ const MODEL_BROAD_PHASES = {}
 	@param config The configuration for the entity type.
 ]=]
 const function RegisterEntityType(name: string, config: Types.EntityConfigInput)
-	assert(not LOCKED, "Config is locked and cannot be modified after startup.")
+	if LOCKED then
+		error("Chrono: Config.RegisterEntityType must be called before Chrono.Start()", 2)
+	end
+	CheckEntityType(name, config)
 	ENTITY_TYPES[name] = config :: any
 end
 
@@ -155,14 +218,34 @@ end
 ]=]
 const function RegisterEntityModel(name: string, model: Model | BasePart | false, broadPhase: vector | Vector3?)
 	if model ~= false and model:IsA("Model") and not model.PrimaryPart then
-		error(name .. " must have a PrimaryPart to be registered as an entity model.")
+		error(`Chrono: Config.RegisterEntityModel model "{name}" must have a PrimaryPart`, 2)
 	end
 	ENTITY_MODELS[name] = model
 	MODEL_BROAD_PHASES[name] = broadPhase
 end
 
 const SetConfig = function(name, value)
-	assert(not LOCKED, "Config is locked and cannot be modified after startup.")
+	if LOCKED then
+		error("Chrono: Config.SetConfig must be called before Chrono.Start()", 2)
+	end
+	if BASE_CONFIG[name] == nil or name == "__VERSION" then
+		error(`Chrono: Config.SetConfig got unknown config "{name}"`, 2)
+	end
+	assert(type(value) == type(BASE_CONFIG[name]), `Chrono: Config.{name} must be a {type(BASE_CONFIG[name])}`)
+	if type(value) == "number" then
+		if name == "DEFAULT_NORMAL_TICK_DISTANCE" or name == "DEFAULT_HALF_TICK_DISTANCE" then
+			assert(value >= 0, `Chrono: Config.{name} must be 0 or greater (math.huge is allowed)`)
+		else
+			assert(value >= 0 and value < math.huge, `Chrono: Config.{name} must be a finite number, 0 or greater`)
+		end
+		if name == "MAX_SNAPSHOT_COUNT" then
+			assert(value >= 1 and value % 1 == 0, "Chrono: Config.MAX_SNAPSHOT_COUNT must be a positive integer")
+		elseif name == "GRID_MAX_UPDATE_TIME" then
+			assert(value > 0, "Chrono: Config.GRID_MAX_UPDATE_TIME must be greater than 0")
+		end
+	elseif CONFIG_OPTIONS[name] then
+		CheckOption(`Config.{name}`, value, CONFIG_OPTIONS[name])
+	end
 	BASE_CONFIG[name] = value
 end :: SetConfig
 
@@ -175,18 +258,18 @@ const function GetEntityModel(name: string): Model | BasePart | false?
 		warn(`Entity model {name} not found in Config.`)
 		return nil
 	end
-	return ENTITY_MODELS[name]
+	return ENTITY_MODELS[name] :: any
 end
 
 const function GetBroadPhase(name: string): vector?
 	return MODEL_BROAD_PHASES[name] :: any
 end
 
-const function GetConfig(name: Configs)
+const function GetConfig(name: Configs): any
 	return BASE_CONFIG[name]
 end
 
-const waiting = {}
+const waiting: { () -> () } = {}
 const function WaitForLock(fx: () -> ())
 	if LOCKED then
 		fx()
@@ -197,12 +280,16 @@ end
 
 const function SetWarningSeverity(level: WarningLevels)
 	if level ~= "NONE" and level ~= "LOW" and level ~= "MEDIUM" and level ~= "HIGH" then
-		error("Invalid warning level: " .. tostring(level))
+		error(`Chrono: Config.SetWarningSeverity expected "NONE", "LOW", "MEDIUM" or "HIGH", got {level}`, 2)
 	end
 	BASE_CONFIG.WARNING_SEVERITY = level
 end
 
 const function Lock()
+	assert(BASE_CONFIG.MIN_BUFFER <= BASE_CONFIG.MAX_BUFFER, "Chrono: Config.MIN_BUFFER must not exceed MAX_BUFFER")
+	for name, config in ENTITY_TYPES do
+		CheckEntityType(name, config)
+	end
 	(require)(script.Parent.Warn).low("Config is now locked")
 
 	LOCKED = true
@@ -219,10 +306,10 @@ const function Lock()
 			or BASE_CONFIG.DEFAULT_MODEL_REPLICATION_MODE :: any
 		cloned.INTERPOLATION_MODE = cloned.INTERPOLATION_MODE or BASE_CONFIG.DEFAULT_INTERPOLATION_MODE :: any
 		if IS_SERVER then
-			cloned.TICKER = (require)(script.Parent.Ticker).new(cloned)
+			cloned.ticker = (require)(script.Parent.Ticker).new(cloned)
 		else
 			cloned.CLIENT_CLOCK = {} :: any
-			cloned.UpdateBuffer = function(self, buffer: number)
+			cloned.UpdateBuffer = function(self: Types.EntityConfig, buffer: number)
 				if not self.CLIENT_CLOCK or not next(self.CLIENT_CLOCK :: any) then
 					error("Config not initialized yet, cannot update buffer for entity type: " .. self.NAME)
 				end
@@ -234,8 +321,6 @@ const function Lock()
 					self.CLIENT_CLOCK.HALF:UpdateBuffer(buffer)
 				end
 
-				-- Owned entities of this type use their own per-entity clock, so update those too.
-				-- Skip any entity that set an explicit per-entity override (_clockBuffer), which wins over the config.
 				const Holder = (require)(script.Parent.Holder)
 				const Entity = (require)(script.Parent.Entity)
 				for _, entity in Holder.idMap do
@@ -258,6 +343,7 @@ return {
 	RegisterEntityType = RegisterEntityType,
 	RegisterEntityModel = RegisterEntityModel,
 	FLAGS = {
+		["CHARACTER_WAIT_DELAY"] = true, -- Waits for CharacterAppearanceLoaded before loading
 		["SERVER_VELOCITY_FIX"] = true, -- Fixes velocity calculation on the server when two packets are received next to each other
 		["VELOCITY_CALC_FIX"] = true, -- Fixes velocity calculation when dt is less then tickrate
 		["SNAPSHOT_INTERPOLATION_FIX"] = true, -- Fixes interpolation of snapshots when replication is stopped briefly and resumed rapidly which can cause slight jitter due to velocity.
@@ -266,14 +352,14 @@ return {
 	},
 
 	_EntityConfigs = ENTITY_TYPES,
-	_GetEntityType = GetEntityType, --// For internal use only
+	_GetEntityType = GetEntityType, --// For internal use only (kept for compatibility)
 	GetEntityType = GetEntityType,
 	_GetEntityModel = GetEntityModel,
 	_GetConfig = GetConfig,
 	_Lock = Lock,
 	_WaitForLock = WaitForLock,
 	_GetBroadPhase = GetBroadPhase,
-	_Base_Config = BASE_CONFIG, --//Modifying this after locking may not change behaviors of some config options.
+	_Base_Config = BASE_CONFIG, --//Modifying this after locking may change behaviors of some config options.
 	SetModelPrimaryForChrono = function(model: Model, primaryName: string)
 		model:SetAttribute(CHRONO_PRIMARY, primaryName)
 	end,

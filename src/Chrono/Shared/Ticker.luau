@@ -1,7 +1,4 @@
-const RunService = game:GetService("RunService")
 const Ticker = {}
-
---//TODO: this should be in server since client don't use it, maybe move later
 
 const function popSwap(t, item, index)
 	const lastIndex = #t
@@ -15,6 +12,7 @@ end
 
 const Types = require(script.Parent.Types)
 const Warn = require(script.Parent.Warn)
+const Signal = require(script.Parent.Signal)
 type Entity = Types.Entity
 type Ticker = Types.Ticker
 
@@ -28,31 +26,43 @@ function Ticker.GetGlobalTick()
 	return GlobalTick
 end
 
+const TICK_MARGIN = 0.1
+
+function Ticker._ShouldTick(nextTick: number, now: number, tickRate: number): boolean
+	return now >= nextTick - tickRate * TICK_MARGIN
+end
+
+function Ticker._GetNextTick(nextTick: number, now: number, tickRate: number): number
+	const following = nextTick + tickRate
+	if now >= following - tickRate * TICK_MARGIN then
+		return now + tickRate
+	end
+	return following
+end
+
+function Ticker._GetElapsedTicks(elapsed: number, tickRate: number): number
+	return (elapsed + tickRate * TICK_MARGIN) // tickRate
+end
+
 function Ticker.new(config: Types.EntityConfig): Ticker
+	-- Tickers holds full and half tick rate so entities don't constantly swap
+	const ticked: Types.Signal<(ticker: Ticker, dt: number) -> (), Ticker, number> = Signal.new()
+	const now = os.clock()
 	const ticker = {
-		tickedHalf = false,
+		isHalf = false,
 		tickHalfRate = config.TICK_RATE * 2,
 		tickRate = config.TICK_RATE,
-		lastTicked = 0,
+		lastTicked = now,
+		_nextTick = now + config.TICK_RATE,
 		tickedFrame = 0,
 		objects = {},
-		callbacks = {},
+		Ticked = ticked.Event,
+		_tickedSignal = ticked,
 		config = config,
 		dt = 0,
 		halfdt = 0,
 	}
 	return ticker
-end
-
-function Ticker.AddCallback(ticker: Ticker, callback: (ticker: Ticker, dt: number) -> ())
-	table.insert(ticker.callbacks, callback)
-end
-
-function Ticker.RemoveCallback(ticker: Ticker, callback: (ticker: Ticker, dt: number) -> ())
-	const index = table.find(ticker.callbacks, callback)
-	if index then
-		table.remove(ticker.callbacks, index)
-	end
 end
 
 function Ticker.Add(ticker: Ticker, object: Entity)
@@ -83,25 +93,31 @@ function Ticker.move(object: Entity, newTicker: Ticker)
 end
 
 function Ticker.CheckUpdate(ticker: Ticker): boolean
-	const difference = os.clock() - ticker.lastTicked
+	const now = os.clock()
+	if not next(ticker.objects) and not ticker._tickedSignal:HasListeners() then
+		ticker.lastTicked = now
+		ticker._nextTick = now + ticker.tickRate
+		ticker.dt = 0
+		ticker.halfdt = 0
+		return false
+	end
+	const nextTick = ticker._nextTick
 
-	if difference >= ticker.tickRate then
-		ticker.lastTicked = os.clock()
+	if Ticker._ShouldTick(nextTick, now, ticker.tickRate) then
+		ticker._nextTick = Ticker._GetNextTick(nextTick, now, ticker.tickRate)
+		const difference = now - ticker.lastTicked
+		ticker.lastTicked = now
 		ticker.tickedFrame = GlobalTick
-		ticker.tickedHalf = not ticker.tickedHalf
+		ticker.isHalf = not ticker.isHalf
 
-		if ticker.tickedHalf then
+		if ticker.isHalf then
 			ticker.halfdt = difference + ticker.dt
 		else
 			ticker.halfdt = difference
 		end
 
 		ticker.dt = difference
-		if #ticker.callbacks > 0 then
-			for _, callback in ticker.callbacks do
-				callback(ticker, difference)
-			end
-		end
+		ticker._tickedSignal:Fire(ticker, difference)
 
 		return true
 	end

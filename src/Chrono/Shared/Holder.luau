@@ -4,10 +4,26 @@ const Signals = require(script.Parent.Events)._Signals
 const IS_SERVER = game:GetService("RunService"):IsServer()
 
 local currentId = 0 -- First Id will start at 1
-const idStack = {}
-const playerChars = {}
+const idStack: { number } = {}
+const playerChars: { [Player]: Types.Entity } = {}
 const idMap: { [number]: Types.Entity } = {}
 const clientOwned: { [Player]: { [Types.Entity]: true } } = {}
+const entityChangedFields = {}
+
+const function RegisterChange(entity: Types.Entity, key: string, value: any, bypass: boolean?, specialValue: any)
+	if not bypass and (entity :: any)[key] == value then
+		return
+	end
+	(entity :: any)[key] = value
+	if not IS_SERVER then
+		return
+	end
+	if not entityChangedFields[entity] then
+		entityChangedFields[entity] = {}
+	end
+	-- any nil with replace with false so it can be serialized and sent to the client
+	entityChangedFields[entity][key] = specialValue or value or false
+end
 
 const MAX_ID = 2 ^ 16 - 1
 
@@ -40,11 +56,7 @@ const function RemovePlayerCharacter(entity: Types.Entity)
 	entity._player = nil
 	if player and playerChars[player] == entity then
 		playerChars[player] = nil
-		Signals["请不要使用_内部_设置值_拜托谢谢_嗨_这个名字有点长_好吧_再见_算了_这个确实被用了_因为递归错误_而我懒得去解决_所以这是一个能用的_创可贴式修复_好吧"]:Fire(
-			entity,
-			"_player",
-			nil
-		)
+		RegisterChange(entity, "_player", nil)
 		Signals.PlayerCharacterUnregistered:Fire(player, entity)
 	end
 end
@@ -57,18 +69,14 @@ end
 ]=]
 const function SetAsCharacter(player: Player, entity: Types.Entity)
 	if not idMap[entity.id] or entity.id < 1 then
-		error("Entity must be registered before being set as a player character")
+		error("Chrono: Holder.SetAsCharacter entity must be registered first", 2)
 	end
 	const old: Types.Entity? = playerChars[player]
 	if old then
 		RemovePlayerCharacter(old)
 	end
 	playerChars[player] = entity
-	Signals["请不要使用_内部_设置值_拜托谢谢_嗨_这个名字有点长_好吧_再见_算了_这个确实被用了_因为递归错误_而我懒得去解决_所以这是一个能用的_创可贴式修复_好吧"]:Fire(
-		entity,
-		"_player",
-		player
-	)
+	RegisterChange(entity, "_player", player)
 	Signals.PlayerCharacterRegistered:Fire(player, entity)
 end
 
@@ -80,7 +88,7 @@ end
 ]=]
 const function RegisterEntity(entity: Types.Entity)
 	if entity.destroyed then
-		error("Cannot register a destroyed entity")
+		error("Chrono: Holder.RegisterEntity cannot register a destroyed entity", 2)
 	end
 	if idMap[entity.id] then
 		Warn.medium("Entity is already registered", entity)
@@ -198,7 +206,9 @@ return {
 	idMap = idMap,
 	_clientOwned = clientOwned,
 	_playerChars = playerChars,
+	_entityChangedFields = entityChangedFields,
 
+	RegisterChange = RegisterChange,
 	RegisterEntity = RegisterEntity,
 	UnregisterEntity = UnregisterEntity,
 	GetEntityStorageInstance = getEntityStorageInstance,

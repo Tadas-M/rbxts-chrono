@@ -7,9 +7,11 @@ type SnapshotData<Value, Velocity> = Types.SnapshotData<Value, Velocity>
 type Snapshot<Value, Velocity> = Types.Snapshot<Value, Velocity>
 
 const Config = require(script.Parent.Config)
+const InterpolationMath = require(script.Parent.InterpolationMath)
 const Warn = require(script.Parent.Warn)
 
-local MAX_LENGTH
+local MAX_LENGTH: number
+const PEAK_SPEED_DECAY = 0.98
 
 Config._WaitForLock(function()
 	MAX_LENGTH = Config._GetConfig("MAX_SNAPSHOT_COUNT")
@@ -93,12 +95,15 @@ const function Push<Value, Velocity>(self: Snapshot<Value, Velocity>, timeStamp:
 			self.cache[insertIndex] = newData
 			self.count += 1
 		else
-			for i = 1, insertionPos - 1 do
+			if insertionPos == 1 then
+				return
+			end
+			for i = 1, insertionPos - 2 do
 				const fromIndex = GetBufferIndex(self.head, i + 1)
 				const toIndex = GetBufferIndex(self.head, i)
 				self.cache[toIndex] = self.cache[fromIndex]
 			end
-			const insertIndex = GetBufferIndex(self.head, insertionPos)
+			const insertIndex = GetBufferIndex(self.head, insertionPos - 1)
 			self.cache[insertIndex] = newData
 		end
 	end
@@ -108,14 +113,49 @@ const function PushWithCheck<Value, Velocity>(
 	self: Snapshot<Value, Velocity>,
 	timeStamp: number,
 	value: Value,
-	velocity: Velocity,
-	tickrate: number
+	velocity: Velocity?,
+	tickrate: number,
+	stopped: boolean?
 )
 	const latestData = GetLatest(self)
-	if latestData and timeStamp - latestData.t > tickrate * 3 and Config.FLAGS.SNAPSHOT_INTERPOLATION_FIX then
-		Push(self, timeStamp - tickrate, latestData.value, vector.zero, true)
+	const isNewest = not latestData or timeStamp > latestData.t
+	if stopped then
+		Push(self, timeStamp, value, vector.zero :: any)
+		if isNewest then
+			self.stoppedAt = timeStamp
+		end
+		return
 	end
-	Push(self, timeStamp, value, velocity)
+
+	const position = (value :: any).Position
+	local teleported = false
+	if latestData and isNewest and latestData.t == self.stoppedAt then
+		const moved = vector.magnitude(position - (latestData.value :: any).Position)
+		const gap = timeStamp - latestData.t
+		const travelTime = if self.peakSpeed > 1e-3 then moved / self.peakSpeed else 0
+
+		teleported = travelTime > tickrate * 5
+		const startAt = timeStamp - (if teleported then tickrate else math.max(tickrate, travelTime))
+		if startAt > latestData.t and gap > tickrate * 1.5 then
+			Push(self, startAt, latestData.value, vector.zero :: any)
+		end
+	elseif
+		latestData and InterpolationMath.CheckIdle(latestData :: any, timeStamp, position, tickrate, self.peakSpeed)
+	then
+		latestData.velocity = vector.zero :: any
+		Push(self, timeStamp - tickrate, latestData.value, vector.zero :: any)
+	end
+	if isNewest then
+		self.stoppedAt = nil
+	end
+
+	const pushVelocity: Velocity = velocity
+		or InterpolationMath.VelocityAt(GetLatest(self) :: any, timeStamp, value :: any, tickrate, self.peakSpeed) :: any
+
+	Push(self, timeStamp, value, pushVelocity)
+	if not teleported then
+		self.peakSpeed = math.max(vector.magnitude(pushVelocity :: any), self.peakSpeed * PEAK_SPEED_DECAY)
+	end
 end
 
 const function GetAt<Value, Velocity>(self: Snapshot<Value, Velocity>, at: number, bypassLock: boolean?): Value?
@@ -168,13 +208,7 @@ const function GetAt<Value, Velocity>(self: Snapshot<Value, Velocity>, at: numbe
 		end
 		const alpha = (at - beforeData.t) / dt
 
-		const p0, p1 = (beforeData.value :: any).Position, (afterData.value :: any).Position
-		const v0, v1 = beforeData.velocity, afterData.velocity
-
-		const position = lerpFunction(p0, p1, v0, v1, alpha, dt)
-		const cf = (beforeData.value :: any):Lerp(afterData.value, alpha)
-
-		return CFrame.new(position) * cf.Rotation
+		return lerpFunction(beforeData.value, afterData.value, beforeData.velocity, afterData.velocity, alpha, dt)
 	elseif beforeData then
 		Warn.low("Tried to fetch a time that was ahead of snapshot storage!")
 		return beforeData.value
@@ -190,12 +224,12 @@ const function Clear<Value, Velocity>(self: Snapshot<Value, Velocity>)
 	self.head = 1
 	self.count = 0
 	self.lockedTime = 0
+	self.peakSpeed = 0
+	self.stoppedAt = nil
 end
 
-const function New<Value, Velocity>(
-	lerpFunction: (Vector3, Vector3, Velocity, Velocity, number, number) -> Vector3
-): Snapshot<Value, Velocity>
-	const cache = table.create(MAX_LENGTH)
+const function New<Value, Velocity>(lerpFunction: (Value, Value, Velocity, Velocity, number, number) -> Value): Snapshot<Value, Velocity>
+	const cache: { SnapshotData<Value, Velocity> } = table.create(MAX_LENGTH) :: any
 	for i = 1, MAX_LENGTH do
 		cache[i] = { t = 0, value = (nil :: any) :: Value, velocity = (nil :: any) :: Velocity }
 	end
@@ -205,6 +239,7 @@ const function New<Value, Velocity>(
 		head = 1,
 		count = 0,
 		lockedTime = 0,
+		peakSpeed = 0,
 		Lerp = lerpFunction,
 
 		Push = Push,

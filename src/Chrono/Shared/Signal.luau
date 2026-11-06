@@ -27,6 +27,7 @@
 export type Signal<fx, T...> = {
 	Fire: (self: any, T...) -> (),
 	DisconnectAll: (self: any) -> (),
+	HasListeners: (self: any) -> boolean,
 	Event: Event<fx, T...>,
 }
 
@@ -164,10 +165,11 @@ function Event:Once(fn, defer)
 end
 
 -- Signal class
+const Types = require(script.Parent.Types)
 const Signal = {}
 Signal.__index = Signal
 
-function Signal.new()
+function Signal.new(): Types.Signal<any, ...any>
 	return setmetatable({
 		_type_ = "Signal",
 		Event = Event.new(),
@@ -179,6 +181,10 @@ end
 -- reference to the head handler.
 function Signal:DisconnectAll()
 	self.Event._handlerListHead = false
+end
+
+function Signal:HasListeners(): boolean
+	return self.Event._handlerListHead ~= false
 end
 
 -- Signal:Fire(...) implemented by running the handler functions on the

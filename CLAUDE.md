@@ -19,7 +19,7 @@ This is a TypeScript type definitions package for [Chrono](https://github.com/Pa
 ## Development Commands
 
 ```bash
-npm run sync -- v2.2.0                    # Replace src/Chrono with upstream tag v2.2.0
+npm run sync -- v2.3.0                    # Replace src/Chrono with upstream tag v2.3.0
 rojo sourcemap default.project.json -o sourcemap.json   # Refresh after a sync (Rojo pinned in rokit.toml)
 npm publish                               # Publish to npm (requires authentication)
 ```
@@ -34,5 +34,5 @@ When updating types to match new Chrono versions:
 2. Reference the [Chrono documentation](https://parihsz.github.io/Chrono/) and source code
 3. All types are declared in a single `index.d.ts` file using `declare namespace Chrono`
 4. Use TypeScript function overloads for methods that accept different parameter combinations (see `Config.SetConfig` or `Entity.GetEvent`)
-5. The package targets Chrono v2.2.0 - version is tracked in `package.json`, the JSDoc header in `index.d.ts`, and here; the vendored `src/Chrono/Shared/Config.luau` `__VERSION` must match
+5. The package targets Chrono v2.3.0 - version is tracked in `package.json`, the JSDoc header in `index.d.ts`, and here; the vendored `src/Chrono/Shared/Config.luau` `__VERSION` must match
 6. [docs/chrono-documentation.md](docs/chrono-documentation.md) is the canonical Chrono reference for all consuming projects (the user's global `chrono` skill points at it) - update it alongside version bumps, including its "Migrating" section

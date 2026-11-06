@@ -5,15 +5,15 @@ const Config = require(script.Parent.Parent.Shared.Config)
 const Types = require(script.Parent.Parent.Shared.Types)
 const BufferTracker = require(script.Parent.InterpolationBuffer)
 
-const ClientClocks = {}
-const _ServerOwnedClocks = {}
+const ClientClocks: { [Types.ClientClock]: boolean } = {}
+const _ServerOwnedClocks: { [Types.ClientClock]: boolean } = {}
 
 const function GetBuffer(clientClock: Types.ClientClock): number
 	if clientClock.buffer then
 		return BufferTracker.GetBuffer(clientClock.buffer, clientClock.tickRate)
-	else
-		return clientClock.bufferConst or 0
 	end
+	-- buffer for half ticked clients
+	return (clientClock.bufferConst or 0) + math.max(clientClock.tickRate - clientClock._baseTickRate, 0)
 end
 
 const function Clear(clientClock: Types.ClientClock)
@@ -26,15 +26,6 @@ const function Clear(clientClock: Types.ClientClock)
 	end
 end
 
-const function GetTargetRenderTime(clientClock: Types.ClientClock): number
-	if not clientClock.renderAt then
-		Warn.low("ClientClock: Render time not yet established for", clientClock.name)
-		return 0
-	end
-
-	return clientClock.renderAt
-end
-
 const function GetEstimatedServerTime(clientClock: Types.ClientClock): number
 	if not clientClock.lastClockAt then
 		Warn.low("ClientClock: Estimated server time not yet established for", clientClock.name)
@@ -42,6 +33,18 @@ const function GetEstimatedServerTime(clientClock: Types.ClientClock): number
 	end
 
 	return clientClock.lastClockAt + (os.clock() - clientClock.lastClockDuration)
+end
+
+const function GetTargetRenderTime(clientClock: Types.ClientClock): number
+	if not clientClock.renderAt then
+		if clientClock.lastClockAt then
+			return GetEstimatedServerTime(clientClock) - GetBuffer(clientClock)
+		end
+		Warn.low("ClientClock: Render time not yet established for", clientClock.name)
+		return 0
+	end
+
+	return clientClock.renderAt
 end
 
 const function CheckHasLastClockAt(clientClock: Types.ClientClock, sendTime: number)
@@ -82,12 +85,17 @@ const function OnSnapShot(clientClock: Types.ClientClock, currentSendTime: numbe
 	end
 end
 
+const function OnStop(clientClock: Types.ClientClock, stopTime: number)
+	if clientClock.buffer then
+		BufferTracker.MarkIdle(clientClock.buffer, stopTime)
+	end
+end
+
 const function SetTickRate(clientClock: Types.ClientClock, tickRate: number)
 	if clientClock.tickRate == tickRate then
 		return
 	end
 	clientClock.tickRate = tickRate
-	--//Do something here maybe?
 end
 
 const function Destroy(clientClock: Types.ClientClock)
@@ -136,7 +144,13 @@ const function UpdateBuffer(clientClock: Types.ClientClock, buffer: number?)
 	clientClock.renderAt = nil
 end
 
-const function new(tickRate: number, name: string, bufferNumber: number?, networkOwner: Player?): Types.ClientClock
+const function new(
+	tickRate: number,
+	name: string,
+	bufferNumber: number?,
+	networkOwner: Player?,
+	baseTickRate: number? -- the type's normal tick rate, if `tickRate` is the half rate
+): Types.ClientClock
 	bufferNumber = if bufferNumber and bufferNumber <= 0 then nil else bufferNumber
 	const self: Types.ClientClock = {
 		name = name,
@@ -144,12 +158,13 @@ const function new(tickRate: number, name: string, bufferNumber: number?, networ
 		lastClockDuration = 0,
 		renderAt = nil,
 		tickRate = tickRate,
-		_baseTickRate = tickRate,
+		_baseTickRate = baseTickRate or tickRate,
 		_owner = networkOwner,
 		buffer = nil,
 		bufferConst = bufferNumber,
 
 		OnSnapShot = OnSnapShot,
+		OnStop = OnStop,
 		Refresh = Refresh,
 		GetEstimatedServerTime = GetEstimatedServerTime,
 		GetTargetRenderTime = GetTargetRenderTime,
@@ -187,8 +202,8 @@ Config._WaitForLock(function()
 			return
 		end
 		clientClocks.NORMAL = new(config.TICK_RATE, name .. "_NORMAL", config.BUFFER)
-		if config.HALF_TICK_DISTANCE < math.huge then
-			clientClocks.HALF = new(config.TICK_RATE * 2, name .. "_HALF", config.BUFFER)
+		if (config.HALF_TICK_DISTANCE or math.huge) < math.huge then
+			clientClocks.HALF = new(config.TICK_RATE * 2, name .. "_HALF", config.BUFFER, nil, config.TICK_RATE)
 		end
 	end
 end)

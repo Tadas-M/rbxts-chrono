@@ -1,3 +1,4 @@
+--!native
 const RunService = game:GetService("RunService")
 const Players = game:GetService("Players")
 const Shared = script.Parent.Parent.Shared
@@ -97,12 +98,13 @@ const function SetMountOffset(entity: Types.Entity, mountOffset: CFrame?)
 	entity.mountOffset = mountOffset or CFrame.identity
 end
 
-const ValueChanges = {
-	networkOwner = Entity["设置网络主控玩家"],
+-- This maps SetValue keys to their functions
+const ChangedLookUp = {
+	networkOwner = Entity._SetEntityNetworkOwner,
 	isHalfTicked = SetTickMode,
 	_data = Entity.SetData,
 	entityConfig = Entity.SetConfig,
-	autoUpdatePos = Entity.SetAutoUpdatePos,
+	autoUpdatePosition = Entity.SetAutoUpdatePos,
 	mountParentId = SetMountId,
 	mountOffset = SetMountOffset,
 	broadPhase = Entity.SetBroadPhase,
@@ -116,21 +118,21 @@ const function HandleChanges(changes: { id: number, data: { { any } } })
 	if not entity then
 		return
 	end
-	local hasMetadata
 	local modelData
+	local modelChanged = false
+	local lockValue: boolean? = nil
 	for _, pair in changes.data do
 		const key = pair[1]
 		const value = pair[2]
 
-		const handler = ValueChanges[key]
+		const handler = ChangedLookUp[key]
 		if handler then
 			handler(entity, value)
 		elseif key == "latestCFrame" then
 			Entity.SetCFrame(entity, value)
-		elseif key == "_modelMetaData" then
-			hasMetadata = value
 		elseif key == "model" then
 			modelData = value
+			modelChanged = true -- value is nil when the model was cleared
 		elseif key == "_player" then
 			if value then
 				Holder.SetAsCharacter(value, entity)
@@ -144,35 +146,51 @@ const function HandleChanges(changes: { id: number, data: { { any } } })
 				Entity.ResumeReplication(entity)
 			end
 		elseif key == "_lockedCFReplication" then
-			entity._lockedCFReplication = value
-			if not value then
-				const part = Entity._GetPart(entity)
-				if part then
-					Entity._UnlockPartPhysicsReplication(part)
-				end
-			else
-				Entity.SyncOwnerShip(entity)
-			end
+			lockValue = value
 		else
 			Warn.high("Unhandled entity change key:", key)
 		end
 	end
 
-	if modelData ~= nil then
-		const model, modelType = ModelHelper.CreateModelFromData(modelData)
+	if modelChanged then
+		const model, modelType, handle = ModelHelper.CreateModelFromData(modelData)
 		Entity.SetModel(entity, model, modelType :: any)
-		entity._modelMetaData = hasMetadata
+		entity._modelHandle = handle
+		Entity._SetHumanoidDisabledStates(entity, entity._humanoidDisabledStates)
+		Entity._SetHumanoidState(entity, entity._humanoidState)
+	end
+
+	if lockValue ~= nil then
+		entity._lockedCFReplication = lockValue
+		if lockValue then
+			Entity.SyncOwnerShip(entity)
+		else
+			const part = Entity._GetPart(entity)
+			if part then
+				Entity._UnlockPartPhysicsReplication(part)
+			end
+		end
 	end
 end
 
 const function HandleNewEntity(data: Types.EntityReceivePacket)
-	const model, modelType = ModelHelper.CreateModelFromData(data.model)
-	const entity = Entity._new(data.config, model, modelType, data.cframe)
+	const model, modelType, handle = ModelHelper.CreateModelFromData(data.model)
+	local cframe = data.cframe
+	const localPlayer = Players.LocalPlayer
+	-- initializes cframe for local character just in case client loads in a different spot
+	if data.networkOwner == localPlayer and model and model == localPlayer.Character then
+		const root = (model :: Model).PrimaryPart
+		if root then
+			cframe = root.CFrame
+		end
+	end
+	const entity = Entity._new(data.config, model, modelType :: any, cframe)
 
 	entity.id = data.id
 	entity._player = data._player
-	entity._modelMetaData = data._modelMetaData
+	entity._modelHandle = handle
 	entity.paused = data.paused or false
+	entity.autoUpdatePosition = data.autoUpdatePosition or false
 	entity.isHalfTicked = data.isHalfTicked
 	entity._data = data._data
 	entity.mountParentId = data.mountParentId
@@ -181,9 +199,9 @@ const function HandleNewEntity(data: Types.EntityReceivePacket)
 	entity._lockedCFReplication = data._lockedCFReplication or false
 	entity._interpolationMode = data._interpolationMode
 
-	Entity.Push(entity, data.time, data.cframe)
+	Entity._Push(entity, data.time, cframe)
 
-	Entity["设置网络主控玩家"](entity, data.networkOwner)
+	Entity._SetEntityNetworkOwner(entity, data.networkOwner)
 
 	Entity._SetHumanoidDisabledStates(entity, data._humanoidDisabledStates)
 	Entity._SetHumanoidState(entity, data._humanoidState)
@@ -197,11 +215,16 @@ const function PushCFrameFor(
 	cframe: CFrame,
 	time: number,
 	isHalfTick: boolean,
-	teleport: boolean?
+	teleport: boolean?,
+	isStop: boolean?
 ): boolean
 	const entity = Holder.GetEntityFromId(id)
 	if not entity then
 		Warn.high("Received update for non existent entity with id", id)
+		return false
+	end
+
+	if entity.isContextOwner or clientOwned ~= (entity.networkOwner ~= nil) then
 		return false
 	end
 
@@ -213,6 +236,10 @@ const function PushCFrameFor(
 			return false
 		end
 	end
+	if teleport then
+		entity._ownerChangedAt = nil
+		entity._ownerSmoothing = nil
+	end
 
 	if clientOwned then
 		const renderCache = entity._clientClock
@@ -222,13 +249,19 @@ const function PushCFrameFor(
 			else
 				renderCache:SetTickRate(renderCache._baseTickRate)
 			end
-			renderCache:OnSnapShot(time)
+			if isStop then
+				renderCache:OnStop(time)
+			else
+				renderCache:OnSnapShot(time)
+			end
 		end
 	else
 		const renderCaches = entity.entityConfig.CLIENT_CLOCK
 		if renderCaches then
 			const renderCache = isHalfTick and renderCaches.HALF or renderCaches.NORMAL
-			if renderCache then
+			if renderCache and isStop then
+				renderCache:OnStop(time)
+			elseif renderCache then
 				renderCache:OnSnapShot(time)
 			end
 		end
@@ -239,7 +272,11 @@ const function PushCFrameFor(
 	end
 	entity.isHalfTicked = isHalfTick
 
-	Entity.Push(entity, time, cframe)
+	if isStop then
+		Entity._PushStopped(entity, time, cframe)
+	else
+		Entity._Push(entity, time, cframe)
+	end
 	return true
 end
 
@@ -261,6 +298,7 @@ const function HandleClientOwned(b: buffer)
 			const isFull = bit32.band(packed, 1) == 1
 			const isHalfTickRate = bit32.band(packed, 2) == 2
 			const teleport = bit32.band(packed, 4) == 4
+			const isStop = bit32.band(packed, 8) == 8
 			local cf: CFrame
 			if isFull then
 				cf = DeserializeFull(b, index)
@@ -274,15 +312,19 @@ const function HandleClientOwned(b: buffer)
 				Warn.medium("Received update for non existent entity with id", id)
 				continue
 			end
-			-- Unwrap in the source player's frame (delta-based, offset-0). Shares state with
-			-- this player's other entity packets + the clock relay.
-			const time = ClockUnwrap.unwrapFor(ClientOwnedWrap, entity.networkOwner or "__unknown", rawTime)
-			PushCFrameFor(id, true, cf, time, isHalfTickRate, teleport)
+			const owner = entity.networkOwner
+
+			if owner and owner.Parent == nil then
+				continue
+			end
+
+			const time = ClockUnwrap.unwrapFor(ClientOwnedWrap, owner or "__unknown", rawTime)
+			PushCFrameFor(id, true, cf, time, isHalfTickRate, teleport, isStop)
 		end
 	end
 end
 
-const function HandleServerOwned(b: buffer)
+const function HandleServerOwned(b: buffer, isStop: boolean?)
 	const bLen = buffer.len(b)
 	BytesReceived += bLen
 	local index = 0
@@ -302,7 +344,7 @@ const function HandleServerOwned(b: buffer)
 				cframe = DeserializeYaw(b, index)
 				index += YAW_BYTES
 			end
-			PushCFrameFor(id, false, cframe, lastTicked, isHalfTickRate)
+			PushCFrameFor(id, false, cframe, lastTicked, isHalfTickRate, nil, isStop)
 		end
 	end
 end
@@ -317,8 +359,7 @@ const function HandleUnreliable(id: string, data: buffer)
 	end
 end
 
-const function HandleReliable(newEntities: {}, removedEntities: { number }, entityChanges: { any })
-	--RunService.PreAnimation:Wait() -- was encountering an issues where instances were not replicated prob was streaming endabled?
+const function HandleReliable(newEntities: { any }, removedEntities: { number }, entityChanges: { any })
 	if removedEntities then
 		for _, id in removedEntities do
 			HandleRemoved(id)
@@ -343,21 +384,28 @@ end
 
 UnreliableEvent.OnClientEvent:Connect(HandleUnreliable)
 ReliableEvent.OnClientEvent:Connect(HandleReliable)
+Shared.Remotes.SafeReplicate.OnClientEvent:Connect(function(id: string, data: buffer)
+	if id == "X" then
+		HandleServerOwned(data, true)
+	elseif id == "O" then
+		HandleClientOwned(data)
+	else
+		Warn.high("Unknown replicate id", id)
+	end
+end)
 
 HeartbeatRemote.OnClientEvent:Connect(function(time: number)
-	-- Reduce the full-precision server time into the same offset-0 frame as the buffered
-	-- server-owned headers, otherwise the two feeds would disagree and freeze the clock.
-	const unwrapped = ClockUnwrap.unwrap(ServerWrap, ClockUnwrap.quantize(time))
+	const unwrapped = ClockUnwrap.seatFull(ServerWrap, time)
+	if unwrapped == nil then
+		Warn.medium("Ignored server heartbeat with invalid timestamp:", time)
+		return
+	end
 	for clock in ClientClock.serverOwnedClocks do
-		-- Refresh, not OnSnapShot: keep the clock fresh without feeding the heartbeat
-		-- cadence into the interpolation buffer's jitter estimate.
 		clock:Refresh(unwrapped)
 	end
 end)
 
--- Client-clock relay: reseats each source to the server's authoritative wrap offset so every
--- receiver agrees on the source's epoch regardless of join time. max() avoids regressing a wrap
--- this client already witnessed between relays.
+-- Syncs each player's clock offset from the server
 ClientClockRelayRemote.OnClientEvent:Connect(function(list: { { player: Player, raw: number, offset: number } })
 	if type(list) ~= "table" then
 		return
@@ -366,7 +414,7 @@ ClientClockRelayRemote.OnClientEvent:Connect(function(list: { { player: Player, 
 		const player = entry.player
 		const raw = entry.raw
 		const offset = entry.offset
-		if player and type(raw) == "number" and type(offset) == "number" then
+		if player and player.Parent and type(raw) == "number" and type(offset) == "number" then
 			local state = ClientOwnedWrap[player]
 			if not state then
 				state = ClockUnwrap.new()
